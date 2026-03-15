@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>qhelp</title>
+  <style>
+    body {
+      margin:0;
+      margin-right:3mm;
+      margin-left:3mm;
+      padding:0;
+      font-family: "Gill Sans", sans-serif;
+    }
+
+    .flex{
+      display:flex;
+    }
+
+    .flex img {
+      margin-left: 0.75em;
+    }
+
+    h1,h2,h3 {
+      text-align: center;
+    }
+
+    p {
+      text-align: justify;
+    }
+
+    .red {
+      color: red;
+    }
+
+    .green {
+      color: green;
+    }
+
+    .center {
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+<h1>Vtičnik QNarcIS</h1>
+<div class="flex">
+<p>Vtičnik QNarcIS, razvit v okviru <a href="https://narcis.gov.si/"><strong>projekta LIFE NarcIS</strong></a>, uporabnikom omogoča naprednejše delo s podatki v <a href="https://www.qgis.org/"><strong>programu</strong> <strong>QGIS</strong></a>. Uporabniki lahko na enem mestu preprosto dostopajo do številnih slojev, ki so potrebni za učinkovito opravljanje naravovarstvenega in drugega dela. Omogoča preprosto in hitro odpiranje prostorskih slojev znotraj programa QGIS. Na enem mestu lahko poleg pregledovanja podatkov izvajamo tudi zahtevnejše prostorske analize, poizvedbe na ravni podatkov ter izdelujemo karte po meri.</p>
+<div>
+  <img src="./media/image1.png" style="width:2.04249in;height:1.97997in" />
+</div>
+</div>
+<p>Vtičnik QNarcIS vsebuje dve orodji: <strong>Izbirnik slojev</strong> omogoča izbor samo želenih slojev iz celotnega nabora, medtem ko orodje <strong>Pošlji poligon</strong> izvede poljubno prostorsko podatkovno poizvedbo v <a href="https://narcis.gov.si/ords/r/narcis/narcis"><strong>spletnem portalu NarcIS</strong></a>.</p>
+<p class="center"><img src="./media/image2.png" style="width:2.61458in;height:0.69792in" alt="A black and white text Description automatically generated" /></p>
+<p>Po meri izdelana orodna vrstica vtičnika poleg teh dveh orodij vsebuje funkcionalnosti, kot so <strong>Obvestila</strong>, <strong>Pomoč</strong>, <strong>Nastavitve</strong> in <strong>Prijava v spletni portal NarcIS</strong>.</p>
+
+<h1>Orodja</h1>
+
+<p class="center"><img src="./media/image3.png" style="width:1.73958in;height:0.34375in" /></p>
+<p>Orodje Izbirnik slojev omogoča izbor samo želenih slojev iz celotnega nabora slojev vtičnika QNarcIS (več kot 250). Uporabnik sam na preprost način vključi samo tiste sloje, ki jih potrebuje za opravljanje nalog.</p>
+<p>Ob izbiri orodja Izbirnik slojev se odpre novo okno s seznamom vseh slojev, ki so na voljo za uporabo. Z dvojnim klikom na izbrani sloj, se vam le-ta odpre v projektu v QGIS v oknu »Layers«. Dosegljivi sloji se v Izbirniku slojev obarvajo <span class="green">zeleno</span>, trenutno nedosegljivi pa z <span class="red">rdečo</span> barvo. Prednastavljena urejena hierarhična struktura se iz Izbirnika slojev pri izbranih slojih prenese v okno »Layers«.</p>
+<p>Izbirnik slojev vsebuje polja <strong>Ime sloja</strong>, <strong>Tip servisa</strong>, <strong>Vir servisa</strong> ter <strong>Prikaz pri merilu</strong>. Vsebuje tudi <strong>hitri iskalnik</strong> za lažjo izbiro želenih slojev.</p>
+<p>Vsi sloji v vtičniku so pripravljeni z javnimi spletnimi servisi, kar omogoča prenosljivost. Polje Tip servisa definira, kakšen je način prikaza podatkov. Večina je objektnih spletnih servisov (WFS), s čimer omogočimo izvajanje poizvedb. Vir servisa uporabniku pove, katera organizacija je odgovorna za servisiranje posameznega sloja v vtičniku. Ni pa vir servisa nujno enak organizaciji, ki je lastnica sloja. Polje Prikaz pri merilu poda informacijo, pri kakšnem pogledu (merilu) bo sloj izrisan (viden). Hitri iskalnik pri filtriranju v hierarhičnem drevesu prikaže vse sloje, katerih predniki vsebujejo iskano besedo. Iskanje izvedemo z vnosom v polje »Iskanje po katalogu…«.</p>
+<p>Vsi sloji vsebujejo primerno simbologijo, nekateri imajo vidne oznake ter imajo po potrebi določen prikaz merila. Nekateri sloji imajo vneseno neposredno povezavo prek <strong>akcije</strong> (»actions«) do vsebin v spletnem portalu NarcIS, kjer so uporabniku na voljo dodatni atributi za izbrane objekte.</p>
+<p>Vse sloje lahko v svojem projektu v QGIS poljubno prestavljamo v oknu »Layers«, jim spreminjamo simbologijo, omejitev pogleda in druge nastavitve.</p>
+<p>Projekt v QGIS lahko shranimo in ga tudi delimo. Ob ponovnem odprtju shranjenega projekta bodo vsi predhodno izbrani sloji iz Izbirnika slojev že samodejno prisotni.</p>
+
+<br>
+<p class="center"><img src="./media/image4.png" style="width:2.0625in;height:0.29167in" /></p>
+
+<p>Orodje Pošlji poligon poljubno območje pripravi za nadaljnjo obdelavo v spletnem portalu NarcIS. Uporabnik izbere ali nariše poligon, ki se zapiše v bazo, naprej pa ga lahko uporablja v spletnem portalu NarcIS za izvajanje podrobnejših analiz.</p>
+<p>Uporabnik lahko izbere poljubni poligon iz nabora slojev v vtičniku QNarcIS ali lokalno shranjenih slojev, lahko pa izbere poljubno narisani poligon. Lahko je sestavljen iz več poligonov (»multipolygon«).</p>
+<p>Za izbrano območje je v spletnem portalu NarcIS možno pridobiti podatke o naravovarstvenih in drugih vsebinah, kot so zabeležene vrste na območju, območja s statusom, strokovna mnenja ZRSVN itn.</p>
+<p>Orodje Pošlji poligon lahko uporabljajo izključno registrirani uporabniki spletnega portala NarcIS. V spletnem portalu NarcIS uporabniki vidijo zgodovino lastnih izdelanih poligonov, ki jih lahko kadar koli pregledajo in urejajo. Zapisi se na vstopni strani spletnega portala NarcIS shranijo v kartici QGIS pod gumbom »Moji poligoni«.</p>
+
+<h3>Navodila za uporabo orodja Pošlji poligon</h3>
+<p>Uporabnik v programu QGIS poljubno izbere poligon in ga s klikom na gumb »Pošlji izbrani poligon« <img src="./media/image5.png" style="width:1.28125in;height:0.1875in" />, ki se nahaja v orodju, posreduje v spletni portal NarcIS. Uporabnik lahko vnese tudi opombo.</p>
+<p>Izpiše se z zeleno obarvana vrstica: »Uspeh: Poligon je bil uspešno dodan v bazo. Povezava do poročila za dodani poligon.«</p>
+<p><img src="./media/image6.png" style="width:5.55208in;height:0.25in" /></p>
+<p>Uporabnik na zadnji del sporočila klikne in odpre se brskalnik s povezavo do spletnega portala NarcIS. Če uporabnik še ni vpisan v spletni portal NarcIS, se vanj prijavi. Odpre se zavihek z izbranim poligonom. Tega potrdi s klikom na »Potrjujem poligon«, če je izbral pravo območje. Če uporabnik ni izrisal pravega želenega območja, cel proces izbire poligona ponovi.</p>
+<p>Za lažji pregled je v orodju Pošlji poligon, kot tudi v spletnem portalu NarcIS, dodano tudi iskanje po preteklih poligonih. Iskanje v orodju Pošlji poligon uporabnik izvede z vnosom v polje »Iskanje po tabeli…«, v spletnem portalu NarcIS pa z vnosom v iskalno vrstico (»Poročilo o iskanju«).</p>
+<p>Pri prvi uporabi programa QGIS mora uporabnik vpisati NarcIS uporabniški elektronski naslov in geslo, ki je enako uporabniškemu profilu spletnega portala NarcIS. NarcIS uporabniški elektronski naslov in geslo je treba vpisati samo ob prvem vpisu. Če se pri vnosu uporabniškega profila zmotite, vas bo sistem na to opozoril in postopek vpisa ponovite.</p>
+<p class="center"><img src="./media/image7.png" style="width:4.86458in;height:2.24301in" alt="A screenshot of a computer screen Description automatically generated with low confidence" /></p>
+<p>Če se uporabnik želi prijaviti z drugim uporabniškim imenom in geslom, je treba v nastavitvah programa QGIS (»Settings« -&gt; »Options« -&gt; »Authentification«) odstraniti konfiguracijo z imenom »qnarcis_oauth«, ter zapreti QGIS. Ob ponovni izbiri orodja Pošlji poligon, bo sistem uporabniku ponudil nov vnos uporabniškega profila. Enako stori tudi uporabnik, ki je zmotno vnesel uporabniški elektronski naslov.</p>
+<p class="center"><img src="./media/image8.png" style="width:5.20833in;height:3.60459in" alt="A screenshot of a computer Description automatically generated" /></p>
+
+<div class="flex">
+  <p>Ob prvem vnosu NarcIS uporabniškega profila v orodje Pošlji poligon je treba vnesti tudi »master authentication password«, s katerim uporabnik programa QGIS dostopa do lokalne QGIS baze prijavnih podatkov (ta ni isti, kot dostop do spletnega portala NarcIS). Če geslo za QGIS bazo prijavljenih podatkov (»master authentication password«) še ni bilo nastavljeno, bo QGIS ponudil uporabniku njegovo nastavitev. Uporabnik si izbere poljubno geslo.</p>
+  <div>
+    <img src="./media/image9.png" style="width:2.55208in;height:1.88542in" />
+  </div>
+</div>
+
+<h1>Nadgrajevanje vtičnika QNarcIS</h1>
+<h3>Posodobitev vtičnika QNarcIS</h3>
+
+<p>Za samodejno (avtomatsko) posodabljanje vtičnika QNarcIS mora uporabnik preveriti, da so samodejne posodobitve vtičnikov v programu QGIS vklopljene. V orodni vrstici programa QGIS se izbere »Plugins« ter nato »Manage and Install Plugins…«. Uporabnik izbere »Settings« ter na vrhu zavihka preveri, da je obkljukana opcija »Check for Updates on Startup«.</p>
+<p class="center"><img src="./media/image10.png" style="width:6.26806in;height:5.06654in" alt="A screenshot of a computer Description automatically generated" /></p>
+<p>Ob nadgradnjah vtičnika QNarcIS tako sistem v programu QGIS javi, da je na voljo nova posodobitev vtičnika. Nadgradnjo uporabnik izbere.</p>
+<p>Nadgradnjo lahko uporabnik tudi ročno izbere v programu QGIS, kjer v istem meniju »Plugins« izbere »Installed« ter vtičnik »qnarcis«, nato pa klikne »Upgrade Plugin«.</p>
+<p class="center"><img src="./media/image11.png" style="width:5.61458in;height:3.38719in" alt="A screenshot of a computer Description automatically generated" /></p>
+<p>Po namestitvi posodobitve vtičnika je potreben ponoven zagon programa QGIS, s čimer je vtičnik QNarcIS posodobljen.</p>
+
+<h3>Posodobitev kataloga slojev</h3>
+<p>Ob vsaki posodobitvi vtičnika se samodejno nadgradi tudi katalog slojev. Neodvisno od posodabljanja vtičnika pa ta ob vsakem zagonu programa QGIS tudi preveri, ali je na voljo novejša različica kataloga slojev in jo namesti, če je na voljo.</p>
+<p>Ob prvem zagonu programa QGIS po posodobitvi kataloga slojev (novi sloji, spremenjena struktura) se spremembe avtomatsko namestijo, sistem pa javi opombo: »Nameščanje kataloga slojev: Prosim počakajte, da se nameščanje kataloga slojev konča.«.</p>
+<p><img src="./media/image12.png" style="width:5.5in;height:0.27083in" /></p>
+<p>Počakati je treba nekaj trenutkov, da se namestijo vse spremembe. Sistem javi »Task complete: Nameščanje novega kataloga slojev« ter »Nameščanje novega kataloga slojev: Nov katalog slojev je bil uspešno nameščen«.</p>
+<p><img src="./media/image13.png" style="width:3.63542in;height:0.27083in" /></p>
+<p><img src="./media/image14.png" style="width:4.67708in;height:0.21875in" /></p>
+<p>Po namestitvi posodobitve kataloga slojev je potreben ponoven zagon programa QGIS, s čimer je katalog slojev posodobljen.</p>
+<p>Nadgrajevanje vtičnika ni potrebno, kadar se spremenijo zgolj vsebinske spremembe.</p>
+
+<h1>Druge funkcionalnosti</h1>
+
+<p class="center"><img src="./media/image15.png" style="width:1.45833in;height:0.33333in" /></p>
+<p>Nastavitve uporabniku omogočajo možnost izbora države vtičnika QNarcIS ter možnost nastavitve privzetega sloja ob zagonu programa QGIS.</p>
+<p>Vtičnik je prenosljiv v tujino, zato je poleg vtičnika za Slovenijo (SI) trenutno mogoče izbrati vtičnik za Kosovo (XK). Možna je nastavitev privzete države, v osnovi je to Slovenija.</p>
+<p>V nastavitvah lahko nastavimo privzeti sloj ob zagonu programa QGIS. Privzeti sloj ob zagonu vtičnika za Slovenijo je »Pregledna topografska karta«. Izbiro lahko spremenimo za katerikoli drugi sloj, ki je na voljo v vtičniku, lahko pa prikaz privzetega sloja izklopimo.</p>
+<p class="center"><img src="./media/image16.png" style="width:1.39583in;height:0.32292in" /></p>
+<p>Obvestila neposredno prikažejo vsa obvestila iz <strong>foruma QGIS</strong> spletnega portala NarcIS, ki omogoča izmenjavo dobrih praks in povratnih informacij. Zabeležena je vsa nova vsebina vtičnika QNarcIS – opisani so zadnji popravki, novi sloji ter dodane funkcionalnosti in drug razvoj vtičnika.</p>
+<p>V forumu QGIS lahko registrirani uporabniki delijo mnenja, podajajo pripombe, opišejo potrebe ali povprašajo za nasvete ter za pomoč glede vtičnika, kot tudi na splošno glede delovanja programa QGIS ali glede drugih težav. Obvestila so prikazana v časovnem sosledju.</p>
+<p>Forum QGIS se nahaja na vstopni strani spletnega portala NarcIS v kartici Forum QGIS (desno spodaj).</p>
+<p class="center"><img src="./media/image17.png" style="width:3.13542in;height:0.39583in" /></p>
+<p>V vtičniku QNarcIS je dodana <a href="https://narcis.gov.si/ords/r/narcis/narcis"><strong>povezava do spletnega portala NarcIS</strong></a>, ki je tesno povezan z vtičnikom. V spletnem portalu NarcIS se nahajajo poligoni registriranega uporabnika, izdelani z orodjem Pošlji poligon (glej poglavje Pošlji poligon), prek akcije »actions« v spletnem portalu NarcIS izvemo dodatne podatke o izbranem objektu (glej poglavje Izbirnik slojev), v forumu QGIS spletnega portala NarcIS so navedena vsa obvestila (glej poglavje Obvestila), v spustnem meniju <strong>Podporni podatki</strong> pa se nahajajo vsi sloji vtičnika v primerni hierarhični strukturi z vsebovanimi metapodatki.</p>
+<p>Na vstopni strani sistema NarcIS se na kartici QGIS (levo spodaj) nahajajo <strong>navodila za namestitev vtičnika QNarcIS</strong> in <strong>gradiva preteklih osnovnih ter naprednih tečajev</strong> za program QGIS s poudarkom na vtičniku QNarcIS, izvedenih v projektu LIFE NarcIS. V navodilih je zapisana tudi povezava za prenos programa QGIS, navodila za posodobitev vtičnika in kataloga slojev ter navodila za uporabo orodja Pošlji poligon.</p>
+<p class="center"><img src="./media/image18.png" style="width:1.33333in;height:0.33333in" /></p>
+<p>Pomoč vsebuje več informacij glede samega delovanja vtičnika, razložene so obstoječa orodja ter funkcionalnosti in drugo.</p>
+
+<br>
+<h3>Video povezave</h3>
+
+<p>Uporabniku so lahko v pomoč spodnji posnetki, ki naslavljajo temo uporabe vtičnika QNarcIS in programa QGIS:</p>
+<div style="text-align: left;">
+  <ul>
+    <li><p>posnetek s 3. NarcIS seminarja: <a href="https://youtu.be/CWweILuRJ3Y?si=-Zru0f9q-swlDUR0">QGIS kot sistemski GIS slovenskega naravovarstva in vtičnik QNarcIS</a>,</p></li>
+    <li><p>posnetek predavanja <a href="https://www.youtube.com/watch?v=h4cmV4GT-60&amp;t=7534s">Naravovarstveni vtičnik za QGIS – QNarcIS</a> na konferenci Open Source Geospatial Slovenija 2023,</p></li>
+    <li><p>serija kratkih videoposnetkov:</p>
+      <ul>
+        <li><p><a href="https://youtube.com/shorts/ey3iCqrOBJU?si=FlZQoLbYEwWYhHOM">Kaj je QNarcIS?</a></p></li>
+        <li><p><a href="https://youtube.com/shorts/w5u2P7N5Yz4?si=HsKv_1ME8SFz-Tme">Kaj je bilo najbolj pomembno pri razvoju QNarcIS?</a></p></li>
+        <li><p><a href="https://youtube.com/shorts/HpNzS0LMkVY?si=9HhwpeHjZiRoxhPI">Kako lahko uporabimo vtičnik QNarcIS?</a></p></li>
+        <li><p><a href="https://youtube.com/shorts/KvaAfwbBbtU?si=IHGows9_086vMIoC">Kako QNarcIS pomaga naravovarstvenikom?</a></p></li>
+        <li><p><a href="https://youtube.com/shorts/abm-Mxw4H0U?si=QFE2G0utt67kbQpc">Kako namestimo QGIS in vtičnik QNarcIS?</a></p></li>
+      </ul>
+    </li>
+  </ul>
+</div>
+
+<br>
+<h3>Pripombe in predlogi za izboljšavo vtičnika QNarcIS</h3>
+<p>Uporabniki lahko pripombe in predloge za izboljšavo vtičnika QNarcIS sporočijo v <a href="https://narcis.gov.si/ords/r/narcis/narcis"><strong>forum QGIS spletnega portala NarcIS</strong></a>.</p>
+<p>Osebno jih lahko sporočijo tudi prek elektronske pošte na:</p>
+<p><a href="mailto:narcis.arso@gov.si">narcis.arso@gov.si</a></p>
+</body>
+</html>

@@ -1,0 +1,17 @@
+<RCC>
+    <qresource prefix="/plugins/q_narcis" >
+        <file>icons/narcis.png</file>
+        <file>icons/question-mark.png</file>
+        <file>icons/newspaper-solid.svg</file>
+        <file>icons/list-solid.svg</file>
+        <file>icons/gear-solid.svg</file>
+        <file>icons/iskanje.svg</file>
+        <file>icons/poslji_poligon.svg</file>
+        <file>icons/LIFE_NarcIS-logo.svg</file>
+        <file>icons/user-key-svgrepo-com.svg</file>
+        <file>icons/eye-slash-svgrepo-com.svg</file>
+        <file>icons/eye-svgrepo-com.svg</file>
+        <file>icons/logout-svgrepo-com.svg</file>
+        <file>icons/lock-closed-svgrepo-com.svg</file>
+    </qresource>
+</RCC>

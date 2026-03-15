@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>qhelp</title>
+  <style>
+    body {
+      margin:0;
+      margin-right:3mm;
+      margin-left:3mm;
+      padding:0;
+      font-family: "Gill Sans", sans-serif;
+    }
+
+    .flex{
+      display:flex;
+    }
+
+    .flex img {
+      margin-left: 0.75em;
+    }
+
+    h1,h2,h3 {
+      text-align: center;
+    }
+
+    p {
+      text-align: justify;
+    }
+
+    .red {
+      color: red;
+    }
+
+    .green {
+      color: green;
+    }
+
+    .h1 {
+        font-family: "Gill Sans", sans-serif;
+        font-size: 32px;
+        font-weight: 700;
+    }
+
+    .center {
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+<h1>QNarcIS Plugin</h1>
+
+<div>
+    <p>The QNarcIS plugin, developed as part of the <a href="https://narcis.gov.si/"><strong>LIFE NarcIS project</strong></a>, enables users to work more effectively with data in the QGIS program. Users can easily access a variety of layers necessary for efficient nature conservation and other tasks in one place. It allows for simple and quick opening of spatial layers within the QGIS program. In addition to viewing data, more advanced spatial analyses, data queries, and custom map creation can be performed in one place.</p>
+    <p>The QNarcIS plugin includes a <strong>Layer Selector tool</strong> that allows selection of only the desired layers from the entire set.</p>
+</div>
+
+<p class="center">
+    <div class="flex" style="justify-content: center;">
+        <div class="h1">QNarcIS Toolbar</div>
+        <div>
+            <img src="./media/image1.png" style="margin-top: 1mm; width:1.04167in;height:0.33333in" />
+        </div>
+    </div>
+</p>
+
+<p>The custom toolbar of the plugin includes the <strong>Layer Selector tool</strong>, <strong>Settings</strong>, and <strong>Help</strong>.</p>
+
+<p class="center"><img src="./media/image2.png" style="margin-bottom: -2mm; width:2.54104in;height:0.47917in" /></p>
+<p>The Layer Selector tool allows users to select only the desired layers from the entire set of layers in the QNarcIS plugin. Users can easily include only those layers needed for task completion.</p>
+<p>When the Layer Selector tool is selected, a new window opens with a list of all available layers for use. By double-clicking on a selected layer, it opens in the QGIS project in the "Layers" panel. Accessible layers in the Layer Selector are colored <span class="green">green</span>, while currently inaccessible ones are colored <span class="red">red</span>. The pre-set hierarchical structure from the Layer Selector is transferred to the "Layers" panel for the selected layers.</p>
+<p>The Layer Selector includes fields for <strong>Layer Name</strong>, <strong>Service Type</strong>, <strong>Service Source</strong>, and <strong>Display at Scale</strong>. It also contains a <strong>quick search feature</strong> to make it easier to select the desired layers.</p>
+<p>All layers in the plugin are prepared with public web services, ensuring portability. The Service Type field defines the type of data (WMS, WFS…). The Service Source field informs which organization is responsible for servicing the individual layer in the plugin. The service source is not necessarily the same as the layer owner organization. The Display at Scale field provides information on what view (scale) the layer will be drawn (visible). The quick search in the hierarchical tree displays all layers whose structural precursor contain the searched word when filtering. Searching is done by entering the query in the "Search the catalog..." field.</p>
+<p>All layers contain appropriate symbology, some have visible labels, and certain layers have defined display scales as needed.</p>
+<p>All layers can be freely moved within the "Layers" panel in your QGIS project, with changes in symbology, view constraints, and other settings possible.</p>
+<p>The QGIS project can be saved and shared. Upon reopening the saved project, all previously selected layers from the Layer Selector will already be automatically present.</p>
+
+<h1>Updating the QNarcIS Plugin</h1>
+<h3>Plugin Update</h3>
+
+<p>For automatic updates of the QNarcIS plugin, users must ensure that automatic plugin updates are enabled in the QGIS program. In the QGIS toolbar, select "Plugins" and then "Manage and Install Plugins...". The user selects "Settings" and ensures that the "Check for Updates on Startup" option is checked at the top of the tab.</p>
+<p class="center"><img src="./media/image3.png" style="width:5.65625in;height:4.57201in" alt="A screenshot of a computer Description automatically generated" /></p>
+<p>When the QNarcIS plugin is available for an upgrad, the system in the QGIS program notifies the user that a new update is available. The user selects the upgrade.</p>
+<p>Users can also manually select the upgrade in the QGIS program in the "Plugins" menu by selecting "Upgradable", then the "qnarcis" plugin, and clicking "Upgrade Plugin".</p>
+<p class="center"><img src="./media/image4.png" style="width:6.3in;height:3.80007in" alt="A screenshot of a computer Description automatically generated" /></p>
+<p>After installing the plugin update, a restart of the QGIS program is required to complete the update of the QNarcIS plugin.</p>
+
+<h3>Layer Catalog Update</h3>
+<p>With each plugin update, the layer catalog is also automatically upgraded. Independently of the plugin updates, the QGIS program checks for a newer version of the layer catalog each time it starts and installs it if available.</p>
+<p>Upon the first startup of the QGIS program after the layer catalog update (new layers, changed structure), the changes are automatically installed, and the system notifies the user with a message: "Installing layer catalog: Please wait for the installation of the layer catalog to finish."</p>
+<p><img src="./media/image5.png" style="width:6.26042in;height:0.25in" /></p>
+<p>Users have to wait a few moments for all changes to be installed. The system will notify "Installing a new layer catalog: New layer catalog successfully installed"</p>
+<p><img src="./media/image6.png" style="width:6.19792in;height:0.28543in" /></p>
+<p>After installing the layer catalog update, a restart of the QGIS program is required to complete the update of the layer catalog.</p>
+<p>Upgrading the plugin is not necessary when only content changes are made.</p>
+
+<p class="center"><img src="./media/image7.png" style="width:2.54104in;height:0.47917in" /></p>
+<p>Settings allow users to select the country of the QNarcIS plugin and set the default layer on QGIS startup.</p>
+<p>The plugin is portable abroad, so in addition to the plugin for Slovenia (SI), it is currently possible to select the plugin for Kosovo (XK). The default country setting is Slovenia.</p>
+<p>In the settings, you can set the default layer on QGIS startup. The default layer for Kosovo plugin startup is "OpenStreetMap". The selection can be changed to any other available layer in the plugin, or the default layer display can be turned off.</p>
+
+<p class="center"><img src="./media/image8.png" style="width:2.14942in;height:0.45833in" /></p>
+<p>Help provides more information about the plugin's operation, existing tools, functionalities, and more.</p>
+
+<h3>Suggestions and Feedback for QNarcIS Plugin Improvement</h3>
+<p>Users can send suggestions and feedback for improving the QNarcIS plugin via email to: <a href="mailto:narcis.arso@gov.si"><strong>narcis.arso@gov.si</strong></a></p>
+
+</body>
+</html>
