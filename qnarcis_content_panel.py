@@ -44,7 +44,7 @@ class QNarcisContentPanel:
         self.translations = translations or {}
 
         self.plugin_dir = os.path.dirname(__file__)
-        self.help_dir = os.path.join(self.plugin_dir, "help")
+        self.help_dir = os.path.join(self.plugin_dir, "docs")
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.refresh)

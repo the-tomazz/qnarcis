@@ -3,7 +3,6 @@
 QGIS plugin for the Slovenian Nature Information System - NarcIS  
 QGIS-vtičnik za informacijski sistem za naravo - NarcIS
 
-## Slovensko
 
 Vtičnik QNarcIS omogoča delo s prostorskimi podatki v Sloveniji in zagotavlja neposreden dostop do biodiverzitetnih, naravovarstvenih in podpornih podatkov ter njihovi analizi v orodju QGIS, ki je standard pri uporabi GIS v slovenskem varstvu narave. Njegova povezanost z informacijskim sistemom za naravo - NarcIS podpira napredno izvajanje prostorskih poizvedb in preprost dostop do specifičnih podatkovnih slojev.
 
@@ -13,7 +12,7 @@ Vtičnik vsebuje tudi navodila za uporabo in objave o aktualnih novostih vtični
 
 Vtičnik je mogoče prilagoditi tudi za delo v tujini.
 
-## English
+---
 
 The QNarcIS plugin enables working with spatial data in Slovenia and provides direct access to biodiversity, nature conservation, and supplementary spatial data, as well as their analysis within QGIS, which is the standard GIS tool used in Slovenian nature conservation. Its integration with the Slovenian Nature Information System - NarcIS supports advanced spatial analyses and easy access to specific data layers.
 
@@ -28,5 +27,5 @@ The plugin can also be adapted for use outside Slovenia.
 - Homepage: https://narcis.gov.si
 - Repository: https://github.com/the-tomazz/qnarcis
 - Issues: https://github.com/the-tomazz/qnarcis/issues
-- Slovenian help: [help/si/index.html](help/si/index.html)
-- English help: [help/en/index.html](help/en/index.html)
+- Slovenian help: [https://the-tomazz.github.io/qnarcis/si/index.html](https://the-tomazz.github.io/qnarcis/si/index.html)
+- English help: [https://the-tomazz.github.io/qnarcis/en/index.html](https://the-tomazz.github.io/qnarcis/en/index.html)
