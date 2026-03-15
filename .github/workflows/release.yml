@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Read plugin version from metadata.txt
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(awk -F= '/^version=/{print $2; exit}' metadata.txt | tr -d '[:space:]')"
+          if [[ -z "$version" ]]; then
+            echo "Could not read version from metadata.txt" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Validate tag matches metadata version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          metadata_version="${{ steps.meta.outputs.version }}"
+          if [[ "$tag_version" != "$metadata_version" ]]; then
+            echo "Tag version '$tag_version' does not match metadata version '$metadata_version'." >&2
+            exit 1
+          fi
+
+      - name: Build plugin zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist/qnarcis
+          rsync -a \
+            --exclude '.git' \
+            --exclude '.github' \
+            ./ dist/qnarcis/
+          (
+            cd dist
+            zip -r "qnarcis.${{ steps.meta.outputs.version }}.zip" qnarcis
+          )
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/qnarcis.${{ steps.meta.outputs.version }}.zip
+          generate_release_notes: true
