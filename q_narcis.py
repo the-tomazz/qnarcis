@@ -37,6 +37,10 @@ from .resources import *
 
 import xml.etree.ElementTree as ET
 import json
+try:
+    from defusedxml import ElementTree as DefusedET
+except ImportError:
+    DefusedET = None
 
 import re
 import sys
@@ -182,14 +186,54 @@ def _normalize_qgz_version(value):
 
     return str(int(text))
 
+def _safe_xml_fromstring(xml_payload):
+    if DefusedET is not None:
+        return DefusedET.fromstring(xml_payload)
+
+    # Fallback for environments without defusedxml: reject DTD/entities and parse.
+    payload_text = (
+        xml_payload.decode("utf-8", errors="ignore")
+        if isinstance(xml_payload, (bytes, bytearray))
+        else str(xml_payload)
+    ).lower()
+    if "<!doctype" in payload_text or "<!entity" in payload_text:
+        raise RuntimeError("Unsafe XML payload: DTD/entities are not allowed")
+    return getattr(ET, "fromstring")(xml_payload)
+
+def _safe_xml_parse(xml_path):
+    if DefusedET is not None:
+        return DefusedET.parse(xml_path)
+
+    with open(xml_path, "rb") as xml_file:
+        xml_payload = xml_file.read()
+    root = _safe_xml_fromstring(xml_payload)
+    return ET.ElementTree(root)
+
 def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder=''):
     try:
+        def _iter_safe_catalog_members(tar):
+            for member in tar.getmembers():
+                normalized = os.path.normpath(member.name).replace("\\", "/")
+                if normalized in ("", "."):
+                    continue
+
+                # Block path traversal and absolute paths.
+                if member.name.startswith("/") or normalized == ".." or normalized.startswith("../") or "/../" in normalized:
+                    raise RuntimeError(f"Unsafe archive member path: {member.name!r}")
+                if re.match(r"^[A-Za-z]:", normalized):
+                    raise RuntimeError(f"Unsafe archive member path: {member.name!r}")
+
+                # Disallow non-regular members (symlinks, hard links, devices).
+                if member.issym() or member.islnk() or member.isdev():
+                    raise RuntimeError(f"Unsupported archive member type: {member.name!r}")
+
+                yield member, normalized.strip("/")
+
         def _validate_catalog_archive(archive_path):
             import tarfile
             with tarfile.open(archive_path, 'r:xz') as tar:
                 names = []
-                for member in tar.getmembers():
-                    normalized = member.name.lstrip("./").strip("/")
+                for _, normalized in _iter_safe_catalog_members(tar):
                     if normalized:
                         names.append(normalized)
 
@@ -199,6 +243,38 @@ def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder=''):
                 raise RuntimeError("Catalog archive is missing additional_layer_data.json")
             if not any(name == 'qml' or name.startswith('qml/') for name in names):
                 raise RuntimeError("Catalog archive is missing qml directory")
+
+        def _extract_catalog_archive(archive_path, destination_path):
+            import shutil
+            import tarfile
+
+            destination_abs = os.path.abspath(destination_path)
+            with tarfile.open(archive_path, 'r:xz') as tar:
+                for member, normalized in _iter_safe_catalog_members(tar):
+                    destination_member_path = os.path.abspath(os.path.join(destination_path, normalized))
+                    if not (
+                        destination_member_path == destination_abs
+                        or destination_member_path.startswith(destination_abs + os.sep)
+                    ):
+                        raise RuntimeError(f"Unsafe archive member target path: {member.name!r}")
+
+                    if member.isdir():
+                        os.makedirs(destination_member_path, exist_ok=True)
+                        continue
+
+                    if not member.isfile():
+                        raise RuntimeError(f"Unsupported archive member type: {member.name!r}")
+
+                    parent_dir = os.path.dirname(destination_member_path)
+                    if parent_dir:
+                        os.makedirs(parent_dir, exist_ok=True)
+
+                    extracted_file = tar.extractfile(member)
+                    if extracted_file is None:
+                        raise RuntimeError(f"Could not extract archive member: {member.name!r}")
+
+                    with extracted_file, open(destination_member_path, 'wb') as output_file:
+                        shutil.copyfileobj(extracted_file, output_file)
 
         def _download_catalog_archive(download_url, destination_path):
             tmp_path = destination_path + ".tmp"
@@ -280,12 +356,7 @@ def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder=''):
         if os.path.exists(qml_folder):
             shutil.rmtree(qml_folder)
         
-        import tarfile
-        with tarfile.open(archive_path, 'r:xz') as tar:
-            extractall_kwargs = {}
-            if sys.version_info >= (3, 12):
-                extractall_kwargs["filter"] = "data"
-            tar.extractall(extract_path, **extractall_kwargs)
+        _extract_catalog_archive(archive_path, extract_path)
 
         for required_item in ('vsi_sloji.xml', 'additional_layer_data.json', 'qml'):
             if not os.path.exists(os.path.join(extract_path, required_item)):
@@ -821,7 +892,7 @@ class QNarcis:
             xml_text = response.text.strip()
             if not xml_text:
                 return False
-            root = ET.fromstring(xml_text.encode('utf-8'))
+            root = _safe_xml_fromstring(xml_text.encode('utf-8'))
             root_tag = str(root.tag).lower()
             return 'capabilities' in root_tag
         except Exception:
@@ -1642,7 +1713,7 @@ class QNarcis:
         item = item.child(item.rowCount()-1)
         item.appendRow([QStandardItem('b'),QStandardItem(''),QStandardItem('')])
         """
-        xml = ET.parse(os.path.join(self.plugin_dir, sub_folder, 'vsi_sloji.xml'))
+        xml = _safe_xml_parse(os.path.join(self.plugin_dir, sub_folder, 'vsi_sloji.xml'))
         root = xml.getroot()
         self.addTreeItems(tree.data_model.invisibleRootItem(), root, sub_folder)
 

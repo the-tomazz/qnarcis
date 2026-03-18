@@ -6,7 +6,8 @@
 name=QNarcIS
 qgisMinimumVersion=3.28.4
 description=SL: QGIS-vticnik za informacijski sistem za naravo - NarcIS | EN: QGIS plugin for the Slovenian Nature Information System - NarcIS
-version=3.2.1
+version=3.2.2
+changelog=3.2.2 (2026-03-18): safe TAR extraction; hardened XML parsing; MD5 set usedforsecurity=False.
 author=Spatial mind (info@spatialmind.org) for Slovenian Environment Agency - ARSO (narcis.arso@gov.si)
 email=narcis.arso@gov.si
 

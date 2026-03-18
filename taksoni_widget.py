@@ -41,11 +41,11 @@ class DownloadTask(QgsTask):
                 # Calculate hash of existing file
                 with open(self.json_file, 'r', encoding='utf-8') as f:
                     existing_content = json.dumps(json.load(f), sort_keys=True).encode('utf-8')
-                    existing_hash = hashlib.md5(existing_content).hexdigest()
+                    existing_hash = hashlib.md5(existing_content, usedforsecurity=False).hexdigest()
                 
                 # Calculate hash of new data
                 new_content = json.dumps(self.new_data, sort_keys=True).encode('utf-8')
-                new_hash = hashlib.md5(new_content).hexdigest()
+                new_hash = hashlib.md5(new_content, usedforsecurity=False).hexdigest()
                 
                 if existing_hash == new_hash:
                     self.changed = False
@@ -539,5 +539,4 @@ class Taksoni(QWidget):
             self.tree.takeTopLevelItem(idx)
         self.loading_item = None
         self.loading_bar = None
-
 
