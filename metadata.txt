@@ -10,11 +10,11 @@ version=3.2.1
 author=Spatial mind (info@spatialmind.org) for Slovenian Environment Agency - ARSO (narcis.arso@gov.si)
 email=narcis.arso@gov.si
 
-about=SL: Vtičnik QNarcIS se povezuje z informacijskim sistemom za naravo - NarcIS, podpira napredno izvajanje prostorskih poizvedb, zagotavlja preprost dostop do biodiverzitetnih, naravovarstvenih in podpornih slojev. S funkcionalnostjo "Pošlji poligon" je podprto izvajanje prostorskih poizvedb neposredno v portalu NarcIS. Vtičnik vsebuje tudi navodila za uporabo in objave o aktualnih novostih vtičnika iz GIS-foruma v portalu NarcIS.
+about=SL: Vtičnik QNarcIS se povezuje z informacijskim sistemom za naravo - NarcIS, podpira napredno izvajanje prostorskih poizvedb, zagotavlja preprost dostop do biodiverzitetnih, naravovarstvenih in podpornih slojev. S funkcionalnostjo "Pošlji sloj" je podprto izvajanje prostorskih poizvedb neposredno v portalu NarcIS. Vtičnik vsebuje tudi navodila za uporabo in objave o aktualnih novostih vtičnika iz GIS-foruma v portalu NarcIS.
     Razvit je bil v okviru projekta LIFE NarcIS (https://narcis.gov.si), dalje se razvija in nadgrajuje v okviru projekta SLO4D (https://www.gov.si/zbirke/projekti-in-programi/zeleni-slovenski-lokacijski-okvir-slo4d).
     Več informacij in navodila: https://github.com/the-tomazz/qnarcis
     ---
-    EN: The QNarcIS plugin connects to the NarcIS nature information system, supports advanced spatial queries, and provides simple access to biodiversity, nature-conservation, and supporting layers. With the "Send polygon" functionality, these queries can be executed directly in the NarcIS portal. The plugin also includes user instructions and announcements of current updates from the GIS forum in the NarcIS portal.
+    EN: The QNarcIS plugin connects to the NarcIS nature information system, supports advanced spatial queries, and provides simple access to biodiversity, nature-conservation, and supporting layers. With the "Send layer" functionality, these queries can be executed directly in the NarcIS portal. The plugin also includes user instructions and announcements of current updates from the GIS forum in the NarcIS portal.
     QNarcIS was developed within the framework of the LIFE NarcIS project (https://narcis.gov.si) and continues to be developed and upgraded as part of the SLO4D project (https://www.gov.si/zbirke/projekti-in-programi/zeleni-slovenski-lokacijski-okvir-slo4d).
     More details and documentation: https://github.com/the-tomazz/qnarcis
 
