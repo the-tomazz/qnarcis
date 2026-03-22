@@ -22,7 +22,8 @@ The plugin can also be adapted for use outside Slovenia.
 
 ## Links
 
-- Homepage: https://narcis.gov.si
+- Homepage: https://the-tomazz.github.io/qnarcis/
+- NarcIS project portal: https://narcis.gov.si
 - Repository: https://github.com/the-tomazz/qnarcis
 - Issues: https://github.com/the-tomazz/qnarcis/issues
 - Slovenian help: [https://the-tomazz.github.io/qnarcis/si/index.html](https://the-tomazz.github.io/qnarcis/si/index.html)
