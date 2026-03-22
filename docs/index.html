@@ -11,7 +11,6 @@
       --text: #1f2a2e;
       --muted: #596b72;
       --accent: #177245;
-      --accent-soft: #e9f5ef;
       --line: #d8e5de;
     }
 
@@ -47,12 +46,33 @@
       text-decoration: underline;
     }
 
-    h1 {
+    .hero {
+      clear: both;
+      display: flex;
+      align-items: center;
+      gap: 14px;
       margin: 0 0 12px;
+    }
+
+    .hero-logo {
+      display: inline-flex;
+      align-items: center;
+      text-decoration: none;
+      flex: 0 0 auto;
+    }
+
+    .hero-logo img {
+      display: block;
+      width: auto;
+      height: 56px;
+      max-width: 220px;
+    }
+
+    h1 {
+      margin: 0;
       font-size: clamp(2rem, 5vw, 3rem);
       line-height: 1.15;
       color: #103b27;
-      clear: both;
     }
 
     .lead {
@@ -94,6 +114,12 @@
       margin: 6px 0;
     }
 
+    .more {
+      font-size: 0.95rem;
+      color: var(--muted);
+      margin: 0 0 10px;
+    }
+
     a {
       color: var(--accent);
     }
@@ -102,47 +128,39 @@
       color: #0f5d38;
     }
 
-    .logos {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      align-items: center;
-    }
-
-    .logo-link {
+    .right-logo {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 8px 10px;
-      background: #fff;
       text-decoration: none;
     }
 
-    .logo-link img {
+    .right-logo img {
       display: block;
-      max-width: 180px;
-      max-height: 58px;
       width: auto;
-      height: auto;
-    }
-
-    .more {
-      font-size: 0.95rem;
-      color: var(--muted);
-      margin-top: 10px;
+      height: 72px;
+      max-width: 230px;
     }
 
     @media (max-width: 760px) {
+      .hero {
+        flex-wrap: wrap;
+      }
+
+      .hero-logo img {
+        height: 44px;
+      }
+
       .links-panel {
         grid-template-columns: 1fr;
       }
 
-      .logos {
-        flex-direction: row;
+      .right-logo {
         justify-content: flex-start;
-        flex-wrap: wrap;
+      }
+
+      .right-logo img {
+        height: 56px;
       }
     }
   </style>
@@ -151,7 +169,13 @@
   <main class="page">
     <a class="lang-switch" href="si/landing.html" lang="sl">slovensko</a>
 
-    <h1>QNarcIS</h1>
+    <div class="hero">
+      <a class="hero-logo" href="https://narcis.gov.si" target="_blank" rel="noopener" aria-label="LIFE NarcIS project">
+        <img src="assets/LIFE_NarcIS-logo.svg" alt="LIFE NarcIS logo" />
+      </a>
+      <h1>QNarcIS</h1>
+    </div>
+
     <p class="lead">
       QGIS plugin for the Slovenian Nature Information System - NarcIS.
     </p>
@@ -166,10 +190,7 @@
         forum in the NarcIS portal.
       </p>
       <p>
-        QNarcIS was developed within the framework of the
-        <a href="https://narcis.gov.si" target="_blank" rel="noopener">LIFE NarcIS project</a>
-        and continues to be developed and upgraded as part of the
-        <a href="https://www.gov.si/zbirke/projekti-in-programi/zeleni-slovenski-lokacijski-okvir-slo4d" target="_blank" rel="noopener">SLO4D project</a>.
+        QNarcIS was developed within the framework of the <a href="https://narcis.gov.si" target="_blank" rel="noopener">LIFE NarcIS project</a> and continues to be developed and upgraded as part of the <a href="https://www.gov.si/zbirke/projekti-in-programi/zeleni-slovenski-lokacijski-okvir-slo4d" target="_blank" rel="noopener">SLO4D project</a>.
       </p>
       <p>
         More details and documentation:
@@ -181,23 +202,18 @@
       <div class="links-panel">
         <div>
           <ul class="link-list">
-            <li><a href="https://narcis.gov.si/ords/r/narcis/narcis" target="_blank" rel="noopener">NarcIS web portal</a></li>
-            <li><a href="https://narcis.gov.si" target="_blank" rel="noopener">LIFE NarcIS project</a></li>
-            <li><a href="https://www.gov.si/zbirke/projekti-in-programi/zeleni-slovenski-lokacijski-okvir-slo4d" target="_blank" rel="noopener">SLO4D project</a></li>
+            <li><a href="https://narcis.gov.si" target="_blank" rel="noopener">NarcIS project web portal</a></li>
+            <li><a href="https://narcis.gov.si/ords/r/narcis/narcis/viri-financiranja" target="_blank" rel="noopener">Funding sources</a></li>
+            <li><a href="https://www.facebook.com/lifenarcis.si" target="_blank" rel="noopener">NarcIS Facebook</a></li>
+            <li><a href="https://www.arso.gov.si/en/" target="_blank" rel="noopener">Slovenian Environment Agency</a></li>
             <li><a href="en/index.html">Full plugin documentation (English)</a></li>
             <li><a href="si/index.html" lang="sl">Polna navodila (slovenščina)</a></li>
           </ul>
-          <p class="more">Related project links and resources.</p>
         </div>
 
-        <div class="logos" aria-label="Project logos">
-          <a class="logo-link" href="https://narcis.gov.si" target="_blank" rel="noopener" aria-label="NarcIS portal">
-            <img src="assets/NarcIS-logo-RB-cropped.png" alt="NarcIS logo" />
-          </a>
-          <a class="logo-link" href="https://narcis.gov.si" target="_blank" rel="noopener" aria-label="LIFE NarcIS project">
-            <img src="assets/LIFE_NarcIS-logo.svg" alt="LIFE NarcIS logo" />
-          </a>
-        </div>
+        <a class="right-logo" href="https://narcis.gov.si" target="_blank" rel="noopener" aria-label="NarcIS portal">
+          <img src="assets/NarcIS-logo-RB-cropped.png" alt="NarcIS logo" />
+        </a>
       </div>
     </section>
   </main>

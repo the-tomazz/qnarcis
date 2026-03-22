@@ -46,12 +46,33 @@
       text-decoration: underline;
     }
 
-    h1 {
+    .hero {
+      clear: both;
+      display: flex;
+      align-items: center;
+      gap: 14px;
       margin: 0 0 12px;
+    }
+
+    .hero-logo {
+      display: inline-flex;
+      align-items: center;
+      text-decoration: none;
+      flex: 0 0 auto;
+    }
+
+    .hero-logo img {
+      display: block;
+      width: auto;
+      height: 56px;
+      max-width: 220px;
+    }
+
+    h1 {
+      margin: 0;
       font-size: clamp(2rem, 5vw, 3rem);
       line-height: 1.15;
       color: #103b27;
-      clear: both;
     }
 
     .lead {
@@ -85,45 +106,49 @@
       margin: 6px 0;
     }
 
+    .more {
+      font-size: 0.95rem;
+      color: var(--muted);
+      margin: 0 0 10px;
+    }
+
     a {
       color: var(--accent);
     }
 
-    .logos {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      align-items: center;
-    }
-
-    .logo-link {
+    .right-logo {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 8px 10px;
-      background: #fff;
       text-decoration: none;
     }
 
-    .logo-link img {
+    .right-logo img {
       display: block;
-      max-width: 180px;
-      max-height: 58px;
       width: auto;
-      height: auto;
+      height: 72px;
+      max-width: 230px;
     }
 
     @media (max-width: 760px) {
+      .hero {
+        flex-wrap: wrap;
+      }
+
+      .hero-logo img {
+        height: 44px;
+      }
+
       .links-panel {
         grid-template-columns: 1fr;
       }
 
-      .logos {
-        flex-direction: row;
+      .right-logo {
         justify-content: flex-start;
-        flex-wrap: wrap;
+      }
+
+      .right-logo img {
+        height: 56px;
       }
     }
   </style>
@@ -132,7 +157,13 @@
   <main class="page">
     <a class="lang-switch" href="../index.html" lang="en">english</a>
 
-    <h1>QNarcIS</h1>
+    <div class="hero">
+      <a class="hero-logo" href="https://narcis.gov.si" target="_blank" rel="noopener" aria-label="LIFE NarcIS project">
+        <img src="../assets/LIFE_NarcIS-logo.svg" alt="LIFE NarcIS logotip" />
+      </a>
+      <h1>QNarcIS</h1>
+    </div>
+
     <p class="lead">QGIS vtičnik za informacijski sistem za naravo - NarcIS.</p>
 
     <section class="card">
@@ -158,22 +189,20 @@
 
     <section class="card">
       <div class="links-panel">
-        <ul class="link-list">
-          <li><a href="https://narcis.gov.si/ords/r/narcis/narcis" target="_blank" rel="noopener">Spletni portal NarcIS</a></li>
-          <li><a href="https://narcis.gov.si" target="_blank" rel="noopener">Projekt LIFE NarcIS</a></li>
-          <li><a href="https://www.gov.si/zbirke/projekti-in-programi/zeleni-slovenski-lokacijski-okvir-slo4d" target="_blank" rel="noopener">Projekt SLO4D</a></li>
-          <li><a href="index.html">Polna navodila (slovenščina)</a></li>
-          <li><a href="../en/index.html" lang="en">Full plugin documentation (English)</a></li>
-        </ul>
-
-        <div class="logos" aria-label="Logotipi projektov">
-          <a class="logo-link" href="https://narcis.gov.si" target="_blank" rel="noopener" aria-label="NarcIS portal">
-            <img src="../assets/NarcIS-logo-RB-cropped.png" alt="NarcIS logotip" />
-          </a>
-          <a class="logo-link" href="https://narcis.gov.si" target="_blank" rel="noopener" aria-label="LIFE NarcIS projekt">
-            <img src="../assets/LIFE_NarcIS-logo.svg" alt="LIFE NarcIS logotip" />
-          </a>
+        <div>
+          <ul class="link-list">
+            <li><a href="https://narcis.gov.si" target="_blank" rel="noopener">Spletni portal projekta NarcIS</a></li>
+            <li><a href="https://narcis.gov.si/ords/r/narcis/narcis/viri-financiranja" target="_blank" rel="noopener">Viri financiranja</a></li>
+            <li><a href="https://www.facebook.com/lifenarcis.si" target="_blank" rel="noopener">NarcIS Facebook</a></li>
+            <li><a href="https://www.arso.gov.si/" target="_blank" rel="noopener">Agencija RS za okolje</a></li>
+            <li><a href="../en/index.html" lang="en">Full plugin documentation (English)</a></li>
+            <li><a href="index.html">Polna navodila (slovenščina)</a></li>
+          </ul>
         </div>
+
+        <a class="right-logo" href="https://narcis.gov.si" target="_blank" rel="noopener" aria-label="NarcIS portal">
+          <img src="../assets/NarcIS-logo-RB-cropped.png" alt="NarcIS logotip" />
+        </a>
       </div>
     </section>
   </main>
