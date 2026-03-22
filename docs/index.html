@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QNarcIS</title>
+  <style>
+    :root {
+      --bg: #f4f8f7;
+      --panel: #ffffff;
+      --text: #1f2a2e;
+      --muted: #596b72;
+      --accent: #177245;
+      --accent-soft: #e9f5ef;
+      --line: #d8e5de;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      color: var(--text);
+      background: linear-gradient(180deg, #e9f3ef 0%, var(--bg) 35%, #eef4f1 100%);
+      line-height: 1.6;
+    }
+
+    .page {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 32px 20px 48px;
+    }
+
+    .lang-switch {
+      display: inline-block;
+      float: right;
+      font-size: 0.9rem;
+      color: var(--muted);
+      text-decoration: none;
+      margin-top: 6px;
+    }
+
+    .lang-switch:hover {
+      color: var(--accent);
+      text-decoration: underline;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(2rem, 5vw, 3rem);
+      line-height: 1.15;
+      color: #103b27;
+      clear: both;
+    }
+
+    .lead {
+      margin: 0 0 24px;
+      color: var(--muted);
+      max-width: 760px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 22px;
+      box-shadow: 0 10px 22px rgba(16, 59, 39, 0.08);
+      margin-bottom: 18px;
+    }
+
+    .card p {
+      margin: 0 0 14px;
+    }
+
+    .card p:last-child {
+      margin-bottom: 0;
+    }
+
+    .links-panel {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 20px;
+      align-items: center;
+    }
+
+    .link-list {
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    .link-list li {
+      margin: 6px 0;
+    }
+
+    a {
+      color: var(--accent);
+    }
+
+    a:hover {
+      color: #0f5d38;
+    }
+
+    .logos {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .logo-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: #fff;
+      text-decoration: none;
+    }
+
+    .logo-link img {
+      display: block;
+      max-width: 180px;
+      max-height: 58px;
+      width: auto;
+      height: auto;
+    }
+
+    .more {
+      font-size: 0.95rem;
+      color: var(--muted);
+      margin-top: 10px;
+    }
+
+    @media (max-width: 760px) {
+      .links-panel {
+        grid-template-columns: 1fr;
+      }
+
+      .logos {
+        flex-direction: row;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <a class="lang-switch" href="si/landing.html" lang="sl">slovensko</a>
+
+    <h1>QNarcIS</h1>
+    <p class="lead">
+      QGIS plugin for the Slovenian Nature Information System - NarcIS.
+    </p>
+
+    <section class="card">
+      <p>
+        The QNarcIS plugin connects to the NarcIS nature information system,
+        supports advanced spatial queries, and provides simple access to biodiversity,
+        nature-conservation, and supporting layers. With the "Send layer" functionality,
+        these queries can be executed directly in the NarcIS portal. The plugin also
+        includes user instructions and announcements of current updates from the GIS
+        forum in the NarcIS portal.
+      </p>
+      <p>
+        QNarcIS was developed within the framework of the
+        <a href="https://narcis.gov.si" target="_blank" rel="noopener">LIFE NarcIS project</a>
+        and continues to be developed and upgraded as part of the
+        <a href="https://www.gov.si/zbirke/projekti-in-programi/zeleni-slovenski-lokacijski-okvir-slo4d" target="_blank" rel="noopener">SLO4D project</a>.
+      </p>
+      <p>
+        More details and documentation:
+        <a href="https://github.com/the-tomazz/qnarcis" target="_blank" rel="noopener">https://github.com/the-tomazz/qnarcis</a>
+      </p>
+    </section>
+
+    <section class="card">
+      <div class="links-panel">
+        <div>
+          <ul class="link-list">
+            <li><a href="https://narcis.gov.si/ords/r/narcis/narcis" target="_blank" rel="noopener">NarcIS web portal</a></li>
+            <li><a href="https://narcis.gov.si" target="_blank" rel="noopener">LIFE NarcIS project</a></li>
+            <li><a href="https://www.gov.si/zbirke/projekti-in-programi/zeleni-slovenski-lokacijski-okvir-slo4d" target="_blank" rel="noopener">SLO4D project</a></li>
+            <li><a href="en/index.html">Full plugin documentation (English)</a></li>
+            <li><a href="si/index.html" lang="sl">Polna navodila (slovenščina)</a></li>
+          </ul>
+          <p class="more">Related project links and resources.</p>
+        </div>
+
+        <div class="logos" aria-label="Project logos">
+          <a class="logo-link" href="https://narcis.gov.si" target="_blank" rel="noopener" aria-label="NarcIS portal">
+            <img src="assets/NarcIS-logo-RB-cropped.png" alt="NarcIS logo" />
+          </a>
+          <a class="logo-link" href="https://narcis.gov.si" target="_blank" rel="noopener" aria-label="LIFE NarcIS project">
+            <img src="assets/LIFE_NarcIS-logo.svg" alt="LIFE NarcIS logo" />
+          </a>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
