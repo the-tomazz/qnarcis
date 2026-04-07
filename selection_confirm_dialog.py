@@ -5,6 +5,10 @@ from qgis.PyQt.QtWidgets import (
 
 _PREFERRED_NAMES = ["fid", "id", "gid", "oid", "eid", "object_id", "featureid"]
 
+_QT_HORIZONTAL = getattr(Qt, "Horizontal", None)
+if _QT_HORIZONTAL is None:
+    _QT_HORIZONTAL = Qt.Orientation.Horizontal
+
 _HELPER_TEXT_COMBO = (
     "Ob prenosu sloja se kot enolični identifikator posameznih objektov privzeto "
     "uporabi atribut z imenom <b>fid</b>. Izbrani sloj tega atributa nima, zato "
@@ -98,7 +102,11 @@ class SendSelectionDialog(QDialog):
         lbl_question.setStyleSheet("margin-bottom: 8px;")
         vbox.addWidget(lbl_question)
 
-        btns = QDialogButtonBox(QDialogButtonBox.Yes | QDialogButtonBox.No, Qt.Horizontal, self)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.Yes | QDialogButtonBox.No,
+            _QT_HORIZONTAL,
+            self,
+        )
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         vbox.addWidget(btns)

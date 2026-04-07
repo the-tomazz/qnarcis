@@ -4,6 +4,10 @@ from qgis.PyQt.QtNetwork import QNetworkRequest, QNetworkReply
 from qgis.core import QgsNetworkAccessManager
 from qgis.PyQt.QtCore import QUrl, QByteArray, QUrlQuery, QEventLoop
 
+_QNETWORKREPLY_NOERROR = getattr(QNetworkReply, 'NoError', None)
+if _QNETWORKREPLY_NOERROR is None:
+    _QNETWORKREPLY_NOERROR = QNetworkReply.NetworkError.NoError
+
 class NetworkRequest():
     def __init__(self, onSuccess = None, onError = None):
         super().__init__()
@@ -14,7 +18,7 @@ class NetworkRequest():
         self.url = None
 
     def handle_response(self, reply):
-        if reply.error() == QNetworkReply.NoError:
+        if reply.error() == _QNETWORKREPLY_NOERROR:
             # Successful response
             rdata = reply.readAll().data()
             response_data = '{}'
