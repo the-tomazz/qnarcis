@@ -1,4 +1,4 @@
-from qgis.PyQt.QtWidgets import (QWidget, QVBoxLayout, QLineEdit, QTreeWidget, 
+﻿from qgis.PyQt.QtWidgets import (QWidget, QVBoxLayout, QLineEdit, QTreeWidget, 
                                 QTreeWidgetItem, QProgressBar)
 from qgis.PyQt.QtCore import Qt
 from qgis.utils import iface
@@ -15,6 +15,10 @@ from urllib.parse import quote
 from qgis.PyQt.QtCore import pyqtSignal
 
 from .gsrv_utils import findGeoserverAuthConfig, build_url_with_params
+
+_QT_USER_ROLE = getattr(Qt, "UserRole", None)
+if _QT_USER_ROLE is None:
+    _QT_USER_ROLE = Qt.ItemDataRole.UserRole
 
 class DownloadTask(QgsTask):
     """QgsTask for downloading JSON data in the background"""
@@ -176,7 +180,7 @@ class Taksoni(QWidget):
         item = QTreeWidgetItem()
         
         if 'key' in node:
-            item.setData(0, Qt.UserRole, node['key'])
+            item.setData(0, _QT_USER_ROLE, node['key'])
         
         title = node.get('title', '')
         slovenskoimetax = node.get('slovenskoimetax', '')
@@ -316,7 +320,7 @@ class Taksoni(QWidget):
         
     def get_item_keys(self, item):
         keys = []
-        clicked_key = item.data(0, Qt.UserRole)
+        clicked_key = item.data(0, _QT_USER_ROLE)
         if clicked_key:
             keys.append(clicked_key)
         self.collect_child_keys(item, keys)
@@ -325,7 +329,7 @@ class Taksoni(QWidget):
     def collect_child_keys(self, parent_item, keys_list):
         for i in range(parent_item.childCount()):
             child = parent_item.child(i)
-            child_key = child.data(0, Qt.UserRole)
+            child_key = child.data(0, _QT_USER_ROLE)
             if child_key:
                 keys_list.append(child_key)
             self.collect_child_keys(child, keys_list)

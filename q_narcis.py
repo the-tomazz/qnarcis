@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 /***************************************************************************
  QNarcis
@@ -57,7 +57,10 @@ from .taksoni_widget import Taksoni
 
 from .gsrv_utils import get_wms_layers_difference, findGeoserverAuthConfig
 
-import sip
+try:
+    from qgis.PyQt import sip
+except ImportError:
+    import sip
 
 import time
 
@@ -84,20 +87,20 @@ class UrlDelegate(QStyledItemDelegate):
 
     def paint(self, painter, option, index):
         # Customize the appearance to look like a hyperlink
-        text = index.data(Qt.DisplayRole)
+        text = index.data(_QT_DISPLAY_ROLE)
         if text:
             font = QFont()
             font.setUnderline(True)
             painter.setFont(font)
-            painter.setPen(option.palette.color(QPalette.Link))
-            painter.drawText(option.rect, Qt.AlignLeft | Qt.AlignVCenter, text)
+            painter.setPen(option.palette.color(_QPALETTE_LINK_ROLE))
+            painter.drawText(option.rect, _QT_ALIGN_LEFT | _QT_ALIGN_VCENTER, text)
         else:
             super().paint(painter, option, index)
 
     def editorEvent(self, event, model, option, index):
         # Handle the click event to open the URL
-        if event.type() == event.MouseButtonRelease and event.button() == Qt.LeftButton:
-            url = index.data(Qt.UserRole + 1)
+        if event.type() == event.MouseButtonRelease and event.button() == _QT_LEFT_BUTTON:
+            url = index.data(_QT_USER_ROLE + 1)
             if url:
                 QDesktopServices.openUrl(QUrl(url))
                 return True
@@ -111,7 +114,7 @@ class CustomDelegate(QStyledItemDelegate):
     def editorEvent(self, event, model, option, index):
         # Custom logic to determine if selection should be canceled
         if event.type() == event.MouseButtonPress:
-            qgzLayerId = self.tree_view.proxy_model.data(index, Qt.UserRole+1)
+            qgzLayerId = self.tree_view.proxy_model.data(index, _QT_USER_ROLE+1)
             if not qgzLayerId:
                 # Return True without doing anything to cancel the selection
                 return True
@@ -208,6 +211,88 @@ def _safe_xml_parse(xml_path):
         xml_payload = xml_file.read()
     root = _safe_xml_fromstring(xml_payload)
     return ET.ElementTree(root)
+
+def _qt_right_dock_widget_area():
+    right_area = getattr(Qt, 'RightDockWidgetArea', None)
+    if right_area is not None:
+        return right_area
+    return Qt.DockWidgetArea.RightDockWidgetArea
+
+def _qt_user_role():
+    user_role = getattr(Qt, 'UserRole', None)
+    if user_role is not None:
+        return int(user_role)
+    return int(Qt.ItemDataRole.UserRole)
+
+_QT_USER_ROLE = _qt_user_role()
+
+def _qt_display_role():
+    display_role = getattr(Qt, 'DisplayRole', None)
+    if display_role is not None:
+        return int(display_role)
+    return int(Qt.ItemDataRole.DisplayRole)
+
+_QT_DISPLAY_ROLE = _qt_display_role()
+
+def _qt_alignment_flag(name):
+    flag = getattr(Qt, name, None)
+    if flag is not None:
+        return flag
+    return getattr(Qt.AlignmentFlag, name)
+
+def _qt_item_data_role(name):
+    role = getattr(Qt, name, None)
+    if role is not None:
+        return role
+    return getattr(Qt.ItemDataRole, name)
+
+_QT_ALIGN_LEFT = _qt_alignment_flag('AlignLeft')
+_QT_ALIGN_RIGHT = _qt_alignment_flag('AlignRight')
+_QT_ALIGN_VCENTER = _qt_alignment_flag('AlignVCenter')
+_QT_ALIGN_BOTTOM = _qt_alignment_flag('AlignBottom')
+_QT_FOREGROUND_ROLE = _qt_item_data_role('ForegroundRole')
+_QT_FONT_ROLE = _qt_item_data_role('FontRole')
+_QT_LEFT_BUTTON = getattr(Qt, 'LeftButton', None)
+if _QT_LEFT_BUTTON is None:
+    _QT_LEFT_BUTTON = Qt.MouseButton.LeftButton
+
+_QT_HORIZONTAL = getattr(Qt, 'Horizontal', None)
+if _QT_HORIZONTAL is None:
+    _QT_HORIZONTAL = Qt.Orientation.Horizontal
+
+_QT_VERTICAL = getattr(Qt, 'Vertical', None)
+if _QT_VERTICAL is None:
+    _QT_VERTICAL = Qt.Orientation.Vertical
+
+_QT_MATCH_RECURSIVE = getattr(Qt, 'MatchRecursive', None)
+if _QT_MATCH_RECURSIVE is None:
+    _QT_MATCH_RECURSIVE = Qt.MatchFlag.MatchRecursive
+
+_QT_MATCH_EXACTLY = getattr(Qt, 'MatchExactly', None)
+if _QT_MATCH_EXACTLY is None:
+    _QT_MATCH_EXACTLY = Qt.MatchFlag.MatchExactly
+
+_QT_DESCENDING_ORDER = getattr(Qt, 'DescendingOrder', None)
+if _QT_DESCENDING_ORDER is None:
+    _QT_DESCENDING_ORDER = Qt.SortOrder.DescendingOrder
+
+_QT_APP_MODAL = getattr(Qt, 'ApplicationModal', None)
+if _QT_APP_MODAL is None:
+    _QT_APP_MODAL = Qt.WindowModality.ApplicationModal
+
+_QDIALOG_ACCEPTED = getattr(QDialog, 'Accepted', None)
+if _QDIALOG_ACCEPTED is None:
+    _QDIALOG_ACCEPTED = QDialog.DialogCode.Accepted
+
+_QPALETTE_LINK_ROLE = getattr(QPalette, 'Link', None)
+if _QPALETTE_LINK_ROLE is None:
+    _QPALETTE_LINK_ROLE = QPalette.ColorRole.Link
+
+def _exec_dialog(dialog):
+    exec_method = getattr(dialog, 'exec', None)
+    if callable(exec_method):
+        return exec_method()
+    return dialog.exec_()
 
 def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder=''):
     try:
@@ -511,7 +596,7 @@ class TableModel(QAbstractTableModel):
         self._header=header
 
     def data(self, index, role):
-        if role == Qt.DisplayRole:
+        if role == _QT_DISPLAY_ROLE:
             # See below for the nested-list data structure.
             # .row() indexes into the outer list,
             # .column() indexes into the sub-list
@@ -528,11 +613,11 @@ class TableModel(QAbstractTableModel):
     
     def headerData(self, section, orientation, role):
         # section is the index of the column/row.
-        if role == Qt.DisplayRole:
-            if orientation == Qt.Horizontal:
+        if role == _QT_DISPLAY_ROLE:
+            if orientation == _QT_HORIZONTAL:
                 return str(self._header[section])
             """
-            if orientation == Qt.Vertical:
+            if orientation == _QT_VERTICAL:
                 return str(self._data.index[section])
             """
 
@@ -657,6 +742,11 @@ class QNarcis:
     def hasDataModel(self):
         return hasattr(self, 'tree') and hasattr(self.tree, 'data_model')
 
+    def _catalog_files_exist(self, sub_folder=''):
+        base_path = os.path.join(self.plugin_dir, sub_folder) if sub_folder else self.plugin_dir
+        required = ('additional_layer_data.json', 'vsi_sloji.xml')
+        return all(os.path.exists(os.path.join(base_path, name)) for name in required)
+
     def onProjectRead(self):
         if self.hasDataModel() or self.run(True):
             self.enumerateExistingLayers()
@@ -689,8 +779,8 @@ class QNarcis:
             if model.hasChildren(modelIndex):
                 self.resetModel(modelIndex)
             else:
-                model.setData(modelIndex, None, QtCore.Qt.ItemDataRole.ForegroundRole)
-                model.setData(modelIndex, None, QtCore.Qt.ItemDataRole.FontRole)
+                model.setData(modelIndex, None, _QT_FOREGROUND_ROLE)
+                model.setData(modelIndex, None, _QT_FONT_ROLE)
 
     def getLayerAncestorNames(self, layerTreeItem, layerTreeItemAncestors):
         if not layerTreeItem:
@@ -755,7 +845,7 @@ class QNarcis:
                     source_type_name = extract_typename(source, provider_key)
 
                     modelIndices = self.getTreeViewModelIndex(layerName, True)
-                    modelLayerIds = [self.tree.data_model.data(modelIndex, Qt.UserRole+1) for modelIndex in modelIndices]
+                    modelLayerIds = [self.tree.data_model.data(modelIndex, _QT_USER_ROLE+1) for modelIndex in modelIndices]
 
                     inx = next((i for i, k in enumerate(modelLayerIds) if k in self.locked_layers_by_id), None)
 
@@ -782,13 +872,13 @@ class QNarcis:
                 layerName = layer.name()
                 modelIndex = self.getTreeViewModelIndex(layerName)
                 if modelIndex:
-                    self.tree.data_model.setData(modelIndex, None, QtCore.Qt.ItemDataRole.ForegroundRole)
-                    self.tree.data_model.setData(modelIndex, None, QtCore.Qt.ItemDataRole.FontRole)
+                    self.tree.data_model.setData(modelIndex, None, _QT_FOREGROUND_ROLE)
+                    self.tree.data_model.setData(modelIndex, None, _QT_FONT_ROLE)
 
     def getTreeViewModelIndex(self, layerName, get_all_indices = False):
         if not self.hasDataModel():
             return None
-        items = self.tree.data_model.findItems(layerName, Qt.MatchRecursive)
+        items = self.tree.data_model.findItems(layerName, _QT_MATCH_RECURSIVE)
         if items and len(items) > 0:
             if get_all_indices:
                 return [item.index() for item in items]
@@ -908,8 +998,8 @@ class QNarcis:
             if not modelIndex:
                 continue
 
-            layerName = self.tree.data_model.data(modelIndex, Qt.DisplayRole)
-            qgzLayerId = self.tree.data_model.data(modelIndex, Qt.UserRole+1)
+            layerName = self.tree.data_model.data(modelIndex, _QT_DISPLAY_ROLE)
+            qgzLayerId = self.tree.data_model.data(modelIndex, _QT_USER_ROLE+1)
 
             layerData = self.layers.get(layerName)
             if qgzLayerId in self.locked_layers_by_id:
@@ -1078,7 +1168,7 @@ class QNarcis:
         else:
             # 2. Prompt for credentials
             dialog = CustomCredentialsDialog()
-            if dialog.exec_() == QDialog.Accepted:
+            if _exec_dialog(dialog) == _QDIALOG_ACCEPTED:
                 uname, pwd = dialog.get_credentials()
                 uname = uname.strip()
                 pwd = pwd.strip()
@@ -1145,7 +1235,10 @@ class QNarcis:
 
         self.toolButton = QToolButton()
         self.toolButton.setIcon(icon)
-        self.toolButton.setPopupMode(QToolButton.MenuButtonPopup)
+        menu_button_popup = getattr(QToolButton, 'MenuButtonPopup', None)
+        if menu_button_popup is None:
+            menu_button_popup = QToolButton.ToolButtonPopupMode.MenuButtonPopup
+        self.toolButton.setPopupMode(menu_button_popup)
 
         self.toolButtonMenu = QMenu(self.toolButton)
         self.toolButton.setMenu(self.toolButtonMenu)
@@ -1338,7 +1431,7 @@ class QNarcis:
         parent = val.parent()
         
         index = self.proxy_model2.index(row, 0, parent)
-        value = self.proxy_model2.data(index, Qt.DisplayRole)
+        value = self.proxy_model2.data(index, _QT_DISPLAY_ROLE)
         
         QDesktopServices.openUrl(QUrl('https://narcis.gov.si/ords/r/narcis/narcis/test-qgis?p62_obmocje_id='+str(int(value))))
 
@@ -1348,8 +1441,8 @@ class QNarcis:
         parent = val.parent()
         
         index = self.tree.proxy_model.index(row, 0, parent)
-        value = self.tree.proxy_model.data(index, Qt.DisplayRole)
-        qgzLayerId = self.tree.proxy_model.data(index, Qt.UserRole+1)
+        value = self.tree.proxy_model.data(index, _QT_DISPLAY_ROLE)
+        qgzLayerId = self.tree.proxy_model.data(index, _QT_USER_ROLE+1)
         self.handleTreeItemClick(value, qgzLayerId, index, self.tree.proxy_model)
 
     def get_geoserver_credentials(self):
@@ -1556,11 +1649,14 @@ class QNarcis:
         return False
 
     def setTreeItemColorAndFont(self, treeItemColor, model, modelIndex):
-        model.setData(modelIndex, treeItemColor, QtCore.Qt.ItemDataRole.ForegroundRole)
+        model.setData(modelIndex, treeItemColor, _QT_FOREGROUND_ROLE)
         font = QFont()
         #font.setBold(True)
-        font.setWeight(QFont.Black) #QFont.ExtraBold
-        model.setData(modelIndex, font, QtCore.Qt.ItemDataRole.FontRole)
+        black_weight = getattr(QFont, 'Black', None)
+        if black_weight is None:
+            black_weight = QFont.Weight.Black
+        font.setWeight(black_weight) #QFont.ExtraBold
+        model.setData(modelIndex, font, _QT_FONT_ROLE)
 
     def addGeoserverConfig(self, user, key):
         am = QgsApplication.authManager()
@@ -1638,7 +1734,7 @@ class QNarcis:
                     
                     lid = child.get('id')
 
-                    nodeNameItem.setData(lid, Qt.UserRole +1)
+                    nodeNameItem.setData(lid, _QT_USER_ROLE +1)
 
                     providerKey = child.get('providerKey')
                     layerItemData = {
@@ -1691,7 +1787,7 @@ class QNarcis:
                 if urlItemLink and urlItemDescription:
                     descriptionText = urlItemDescription
                 urlItem = QStandardItem(descriptionText if urlItemLink else '')
-                urlItem.setData(urlItemLink, Qt.UserRole + 1)
+                urlItem.setData(urlItemLink, _QT_USER_ROLE + 1)
                 stanjeItem = QStandardItem(stanjeItemText)
 
                 items = [nodeNameItem, ownerItem, stanjeItem, urlItem, scaleDependencyItem, organizationItem, providerKeyItem]
@@ -1847,7 +1943,9 @@ class QNarcis:
         if url.lower().endswith('.qgz'):
             url = url[:-4] + '.tar.xz'
 
-        if not clientVersionId or clientVersionId != normalized_server_id or sub_folder:
+        local_catalog_exists = self._catalog_files_exist(sub_folder)
+
+        if not clientVersionId or clientVersionId != normalized_server_id or sub_folder or not local_catalog_exists:
             self.task = QNarcisTask(self.tr("Nameščanje novega kataloga slojev" if not sub_folder else "Pripravljanje kataloga slojev"), installQgz,[normalized_server_id, url, self.plugin_dir, drzava, callback, sub_folder], self.onFinishedInstallingQgz)
             QgsApplication.taskManager().addTask( self.task )
             return
@@ -1899,13 +1997,13 @@ class QNarcis:
             v.setContentsMargins(0, 0, 5, 0)
 
             self.login_status_label_tax.hide()  # hidden by default
-            v.addWidget(self.login_status_label_tax, alignment=Qt.AlignRight)
+            v.addWidget(self.login_status_label_tax, alignment=_QT_ALIGN_RIGHT)
             v.addWidget(tab_widget)
 
             container.setLayout(v)
             self.iskalnik_widget.setWidget(container)
 
-        self.iface.addTabifiedDockWidget(Qt.RightDockWidgetArea, self.iskalnik_widget, ['seznam', 'poizvedba', 'news', 'help'], raiseTab=True)
+        self.iface.addTabifiedDockWidget(_qt_right_dock_widget_area(), self.iskalnik_widget, ['seznam', 'poizvedba', 'news', 'help'], raiseTab=True)
         self.iskalnik_widget.show()
 
         self._initLoginStatusFromAuthConfig()
@@ -1949,7 +2047,7 @@ class QNarcis:
         # TODO: fix to allow choice of dock location
         #self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dockwidget)
         self.dockwidget.setObjectName('seznam')
-        self.iface.addTabifiedDockWidget(Qt.RightDockWidgetArea, self.dockwidget, ['poizvedba','news','help','iskalnik'], raiseTab=True)
+        self.iface.addTabifiedDockWidget(_qt_right_dock_widget_area(), self.dockwidget, ['poizvedba','news','help','iskalnik'], raiseTab=True)
         
         if hide:
             self.dockwidget.hide()
@@ -1989,7 +2087,7 @@ class QNarcis:
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 5, 0)
-        layout.addWidget(self.login_status_label, alignment=Qt.AlignRight)
+        layout.addWidget(self.login_status_label, alignment=_QT_ALIGN_RIGHT)
         layout.addWidget(self.searchbar)
         layout.addWidget(self.tree)
 
@@ -2158,8 +2256,8 @@ class QNarcis:
         row_count = model.rowCount(parent)
         for row in range(row_count):
             index = model.index(row, 0, parent)
-            layer_name = model.data(index, Qt.DisplayRole)
-            qgz_layer_id = model.data(index, Qt.UserRole + 1)
+            layer_name = model.data(index, _QT_DISPLAY_ROLE)
+            qgz_layer_id = model.data(index, _QT_USER_ROLE + 1)
             if qgz_layer_id and layer_name:
                 names.append(str(layer_name))
             if model.hasChildren(index):
@@ -2169,7 +2267,7 @@ class QNarcis:
     def _find_layer_name_in_model(self, model, preferred_names):
         preferred = self._normalize_layer_name_list(preferred_names)
         for name in preferred:
-            items = model.findItems(name, Qt.MatchRecursive | Qt.MatchExactly)
+            items = model.findItems(name, _QT_MATCH_RECURSIVE | _QT_MATCH_EXACTLY)
             if items:
                 return items[0].text()
 
@@ -2244,10 +2342,28 @@ class QNarcis:
         tree.data_model = QStandardItemModel()
         tree.data_model.setHorizontalHeaderLabels([self.tr("Ime sloja"), self.tr("Lastnik sloja"), self.tr("Stanje"), self.tr("Metapodatki"), self.tr("Prikaz pri merilu"), self.tr("Vir servisa"), self.tr("Tip servisa")])
         
+        catalog_base = os.path.join(self.plugin_dir, sub_folder) if sub_folder else self.plugin_dir
+        additional_json_path = os.path.join(catalog_base, 'additional_layer_data.json')
+        xml_path = os.path.join(catalog_base, 'vsi_sloji.xml')
+
         additionalDataById = {}
-        f = open(os.path.join(self.plugin_dir, sub_folder, 'additional_layer_data.json'))
-        additionalDataById = json.load(f)
-        f.close()
+        if not (os.path.exists(additional_json_path) and os.path.exists(xml_path)):
+            self.iface.messageBar().pushMessage(
+                "QNarcIS",
+                self.tr("Katalog slojev še ni nameščen ali je poškodovan. Poskusite ponovno čez nekaj trenutkov."),
+                level=Qgis.Warning
+            )
+
+            tree.proxy_model = QNarcisSortFilterProxyModel()
+            tree.proxy_model.setRecursiveFilteringEnabled(True)
+            tree.proxy_model.setFilterKeyColumn(0)
+            tree.proxy_model.setSourceModel(tree.data_model)
+            tree.setModel(tree.proxy_model)
+            tree.proxy_model.setView(tree)
+            return
+
+        with open(additional_json_path, 'r', encoding='utf-8') as f:
+            additionalDataById = json.load(f)
 
         if not sub_folder:
             self.additionalDataById = additionalDataById
@@ -2325,7 +2441,7 @@ class QNarcis:
 
         if 'qnarcis_oauth' not in am.availableAuthMethodConfigs().keys():
             dialog = CustomCredentialsDialog()
-            if dialog.exec_() == QDialog.Accepted:
+            if _exec_dialog(dialog) == _QDIALOG_ACCEPTED:
                 uname, pwd = dialog.get_credentials()
                 uname = uname.strip()
                 pwd = pwd.strip()
@@ -2361,7 +2477,7 @@ class QNarcis:
         # show the dockwidget
         # TODO: fix to allow choice of dock location
         self.dockwidgetQuery.setObjectName('poizvedba')
-        self.iface.addTabifiedDockWidget(Qt.RightDockWidgetArea, self.dockwidgetQuery,  ['seznam','news','help'], raiseTab=True)
+        self.iface.addTabifiedDockWidget(_qt_right_dock_widget_area(), self.dockwidgetQuery,  ['seznam','news','help'], raiseTab=True)
 
         self.dockwidgetQuery.setWindowTitle('QNarcis - poizvedbe')
         
@@ -2440,7 +2556,7 @@ class QNarcis:
 
         from .selection_confirm_dialog import SendSelectionDialog
         dlg = SendSelectionDialog(layer, sel_count, parent=self.iface.mainWindow())
-        if dlg.exec_() != dlg.Accepted:
+        if _exec_dialog(dlg) != dlg.Accepted:
             return
 
         selected_only = dlg.selected_only
@@ -2509,7 +2625,7 @@ class QNarcis:
         self.proxy_model2.setFilterKeyColumn(-1) # Search all columns.
         self.proxy_model2.setSourceModel(self.model2)
 
-        self.proxy_model2.sort(0, Qt.DescendingOrder)
+        self.proxy_model2.sort(0, _QT_DESCENDING_ORDER)
 
         self.table.setModel(self.proxy_model2)
 
@@ -2553,7 +2669,13 @@ class QNarcis:
         self.layout = layout = QVBoxLayout()
 
         self.msgbar = QgsMessageBar()
-        self.msgbar.setSizePolicy( QSizePolicy.Minimum, QSizePolicy.Fixed )
+        qsp_minimum = getattr(QSizePolicy, 'Minimum', None)
+        if qsp_minimum is None:
+            qsp_minimum = QSizePolicy.Policy.Minimum
+        qsp_fixed = getattr(QSizePolicy, 'Fixed', None)
+        if qsp_fixed is None:
+            qsp_fixed = QSizePolicy.Policy.Fixed
+        self.msgbar.setSizePolicy(qsp_minimum, qsp_fixed)
 
         layout.addWidget(self.msgbar)
         
@@ -2561,7 +2683,7 @@ class QNarcis:
         btnLayout.setContentsMargins(0, 0, 0, 0)
         btnLayout.addWidget(self.sendButton)
         btnLayout.addWidget(self.userLabel)
-        self.userLabel.setAlignment(QtCore.Qt.AlignRight)
+        self.userLabel.setAlignment(_QT_ALIGN_RIGHT)
         btnLayout.setStretch(0,7)
         btnLayout.setStretch(1,3)
         self.btnLayoutWidget = QWidget()
@@ -2616,7 +2738,7 @@ class QNarcis:
         vbox = dlg.layout()
 
         dlg.setWindowTitle(self.tr("Nastavitve"))
-        dlg.setWindowModality(Qt.ApplicationModal)
+        dlg.setWindowModality(_QT_APP_MODAL)
 
         dlg.setFixedWidth(450)
 
@@ -2698,7 +2820,7 @@ class QNarcis:
 
         checkBox.setChecked(bool(getattr(self, 'default_layer_enabled', False)))
         if self.default_layer_name:
-            items = tree.data_model.findItems(self.default_layer_name, Qt.MatchRecursive)
+            items = tree.data_model.findItems(self.default_layer_name, _QT_MATCH_RECURSIVE)
             if items and len(items) > 0:
                 item = items[0]
                 index = item.index()
@@ -2735,8 +2857,8 @@ class QNarcis:
             parent = val.parent()
         
             index = tree.proxy_model.index(row, 0, parent)
-            value = tree.proxy_model.data(index, Qt.DisplayRole)
-            qgzLayerId = tree.proxy_model.data(index, Qt.UserRole+1)
+            value = tree.proxy_model.data(index, _QT_DISPLAY_ROLE)
+            qgzLayerId = tree.proxy_model.data(index, _QT_USER_ROLE+1)
 
             if qgzLayerId:
                 nonlocal defaultLayerName
@@ -2826,9 +2948,9 @@ class QNarcis:
         # OK button
         ok_button = QPushButton('OK', dlg)
         ok_button.clicked.connect(on_ok_clicked)
-        vbox.addWidget(ok_button, alignment=Qt.AlignRight | Qt.AlignBottom)
+        vbox.addWidget(ok_button, alignment=_QT_ALIGN_RIGHT | _QT_ALIGN_BOTTOM)
 
-        result = dlg.exec_()
+        result = _exec_dialog(dlg)
 
         def show_restart_required_message():
             msg = QMessageBox()
@@ -2838,9 +2960,9 @@ class QNarcis:
             msg.setInformativeText("Please save your work and restart QGIS to apply the changes.")
             msg.setStandardButtons(QMessageBox.Ok)
             msg.setDefaultButton(QMessageBox.Ok)
-            msg.exec_()
+            _exec_dialog(msg)
 
-        if result == QDialog.Accepted:
+        if result == _QDIALOG_ACCEPTED:
 
             country_code = comboBox.currentText()
             

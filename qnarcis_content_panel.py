@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from qgis.PyQt.QtCore import Qt, QTimer, QUrl
-from qgis.PyQt.QtGui import QDesktopServices, QPixmap
+from qgis.PyQt.QtGui import QDesktopServices, QPixmap, QPalette
 from qgis.PyQt.QtNetwork import QNetworkReply, QNetworkRequest
 from qgis.PyQt.QtWidgets import (
     QLabel,
@@ -23,6 +23,26 @@ from qgis.PyQt.QtWidgets import (
 )
 from qgis.core import Qgis, QgsBlockingNetworkRequest, QgsMessageLog
 from qgis.gui import QgsDockWidget
+
+_QT_SCROLLBAR_ALWAYS_OFF = getattr(Qt, "ScrollBarAlwaysOff", None)
+if _QT_SCROLLBAR_ALWAYS_OFF is None:
+    _QT_SCROLLBAR_ALWAYS_OFF = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+
+_QT_SCROLLBAR_AS_NEEDED = getattr(Qt, "ScrollBarAsNeeded", None)
+if _QT_SCROLLBAR_AS_NEEDED is None:
+    _QT_SCROLLBAR_AS_NEEDED = Qt.ScrollBarPolicy.ScrollBarAsNeeded
+
+_QT_RICH_TEXT = getattr(Qt, "RichText", None)
+if _QT_RICH_TEXT is None:
+    _QT_RICH_TEXT = Qt.TextFormat.RichText
+
+_QSIZEPOLICY_EXPANDING = getattr(QSizePolicy, "Expanding", None)
+if _QSIZEPOLICY_EXPANDING is None:
+    _QSIZEPOLICY_EXPANDING = QSizePolicy.Policy.Expanding
+
+_QNETWORKREPLY_NOERROR = getattr(QNetworkReply, "NoError", None)
+if _QNETWORKREPLY_NOERROR is None:
+    _QNETWORKREPLY_NOERROR = QNetworkReply.NetworkError.NoError
 
 
 class QNarcisContentPanel:
@@ -74,7 +94,10 @@ class QNarcisContentPanel:
             self._build_ui()
 
         if not self.dockwidget.isUserVisible():
-            self.iface.addTabifiedDockWidget(Qt.RightDockWidgetArea, self.dockwidget, raiseTab=True)
+            right_area = getattr(Qt, "RightDockWidgetArea", None)
+            if right_area is None:
+                right_area = Qt.DockWidgetArea.RightDockWidgetArea
+            self.iface.addTabifiedDockWidget(right_area, self.dockwidget, raiseTab=True)
             self.dockwidget.show()
 
         self.refresh()
@@ -106,8 +129,8 @@ class QNarcisContentPanel:
 
         self.content_scroll_area = QScrollArea()
         self.content_scroll_area.setWidgetResizable(True)
-        self.content_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.content_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.content_scroll_area.setHorizontalScrollBarPolicy(_QT_SCROLLBAR_ALWAYS_OFF)
+        self.content_scroll_area.setVerticalScrollBarPolicy(_QT_SCROLLBAR_AS_NEEDED)
 
         self.content_container = QWidget()
         self.content_scroll_area.setWidget(self.content_container)
@@ -158,7 +181,7 @@ class QNarcisContentPanel:
         browser = QTextBrowser()
         browser.setOpenExternalLinks(False)
         browser.anchorClicked.connect(QDesktopServices.openUrl)
-        browser.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        browser.setSizePolicy(_QSIZEPOLICY_EXPANDING, _QSIZEPOLICY_EXPANDING)
         browser.setSource(QUrl.fromLocalFile(help_path))
 
         self._replace_layout_content(self.content_container, [browser])
@@ -171,7 +194,7 @@ class QNarcisContentPanel:
         browser.setReadOnly(True)
         browser.setOpenExternalLinks(True)
         browser.setHtml(html_content)
-        browser.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        browser.setSizePolicy(_QSIZEPOLICY_EXPANDING, _QSIZEPOLICY_EXPANDING)
 
         self._replace_layout_content(self.content_container, [browser])
 
@@ -191,7 +214,7 @@ class QNarcisContentPanel:
 
         for url, title in links:
             label = QLabel(f'<a href="{html.escape(url)}">{html.escape(title)}</a>')
-            label.setTextFormat(Qt.RichText)
+            label.setTextFormat(_QT_RICH_TEXT)
             label.setOpenExternalLinks(True)
             column.addWidget(label)
 
@@ -202,7 +225,13 @@ class QNarcisContentPanel:
             logo_path = os.path.join(self.plugin_dir, "icons", "NarcIS-logo-RB-cropped.png")
             if os.path.exists(logo_path):
                 logo_label = QLabel()
-                logo_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+                align_hcenter = getattr(Qt, "AlignHCenter", None)
+                if align_hcenter is None:
+                    align_hcenter = Qt.AlignmentFlag.AlignHCenter
+                align_vcenter = getattr(Qt, "AlignVCenter", None)
+                if align_vcenter is None:
+                    align_vcenter = Qt.AlignmentFlag.AlignVCenter
+                logo_label.setAlignment(align_hcenter | align_vcenter)
                 logo_label.setPixmap(QPixmap(logo_path))
                 layout.addStretch(1)
                 layout.addWidget(logo_label)
@@ -256,7 +285,7 @@ class QNarcisContentPanel:
                 raise RuntimeError(blocking_request.errorMessage())
 
             reply = blocking_request.reply()
-            if reply.error() != QNetworkReply.NoError:
+            if reply.error() != _QNETWORKREPLY_NOERROR:
                 raise RuntimeError(reply.errorString())
 
             return json.loads(str(reply.content(), "utf-8"))
@@ -309,7 +338,46 @@ class QNarcisContentPanel:
         # Parsed dates first; fallback keeps deterministic lexical ordering for invalid dates.
         return (1, parsed) if parsed else (0, str(raw_date or ""))
 
+    def _theme_css_colors(self):
+        try:
+            palette = self.dockwidget.palette() if self.dockwidget is not None else self.iface.mainWindow().palette()
+            base = palette.color(QPalette.Base)
+            text = palette.color(QPalette.Text)
+
+            colors = {
+                "bg": base.name(),
+                "text": text.name(),
+                "date": "#6b7280",
+                "separator": "#d8dee6",
+                "link": "#0b61a4",
+                "quote_border": "#c8d4e3",
+                "quote_text": "#374151",
+            }
+
+            if base.lightness() < 128:
+                colors.update(
+                    {
+                        "date": "#9ca3af",
+                        "separator": "#374151",
+                        "link": "#8ab4f8",
+                        "quote_border": "#4b5563",
+                        "quote_text": "#d1d5db",
+                    }
+                )
+            return colors
+        except Exception:
+            return {
+                "bg": "#ffffff",
+                "text": "#202124",
+                "date": "#6b7280",
+                "separator": "#d8dee6",
+                "link": "#0b61a4",
+                "quote_border": "#c8d4e3",
+                "quote_text": "#374151",
+            }
+
     def _wrap_html(self, body_html):
+        colors = self._theme_css_colors()
         return f"""
         <html>
             <head>
@@ -318,7 +386,8 @@ class QNarcisContentPanel:
                     body {{
                         font-family: Arial, sans-serif;
                         font-size: 12px;
-                        color: #202124;
+                        color: {colors['text']};
+                        background: {colors['bg']};
                         margin: 0;
                         padding: 10px;
                     }}
@@ -328,22 +397,22 @@ class QNarcisContentPanel:
                     }}
                     .article-separator {{
                         border: none;
-                        border-top: 1px solid #d8dee6;
+                        border-top: 1px solid {colors['separator']};
                         margin: 14px 0;
                     }}
                     h2 {{ margin: 0 0 4px 0; font-size: 15px; }}
-                    .date {{ color: #6b7280; margin-bottom: 8px; font-size: 11px; }}
+                    .date {{ color: {colors['date']}; margin-bottom: 8px; font-size: 11px; }}
                     p {{ margin: 6px 0; }}
                     ul, ol {{ margin: 6px 0 6px 22px; }}
                     li {{ margin: 2px 0; }}
                     img {{ max-width: 100%; height: auto; border-radius: 4px; display: block; margin: 0; }}
-                    a {{ color: #0b61a4; text-decoration: none; }}
+                    a {{ color: {colors['link']}; text-decoration: none; }}
                     a:hover {{ text-decoration: underline; }}
                     blockquote {{
-                        border-left: 3px solid #c8d4e3;
+                        border-left: 3px solid {colors['quote_border']};
                         margin: 8px 0;
                         padding: 2px 0 2px 10px;
-                        color: #374151;
+                        color: {colors['quote_text']};
                     }}
                 </style>
             </head>
@@ -464,7 +533,7 @@ class QNarcisContentPanel:
             result = blocking_request.get(request)
             if result == QgsBlockingNetworkRequest.NoError:
                 reply = blocking_request.reply()
-                if reply.error() == QNetworkReply.NoError:
+                if reply.error() == _QNETWORKREPLY_NOERROR:
                     content = bytes(reply.content())
                     if content:
                         mime_type = self._guess_mime_type(url)
