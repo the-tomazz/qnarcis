@@ -8,6 +8,10 @@ _QNETWORKREPLY_NOERROR = getattr(QNetworkReply, 'NoError', None)
 if _QNETWORKREPLY_NOERROR is None:
     _QNETWORKREPLY_NOERROR = QNetworkReply.NetworkError.NoError
 
+_QNETWORKREQUEST_CONTENT_TYPE_HEADER = getattr(QNetworkRequest, 'ContentTypeHeader', None)
+if _QNETWORKREQUEST_CONTENT_TYPE_HEADER is None:
+    _QNETWORKREQUEST_CONTENT_TYPE_HEADER = QNetworkRequest.KnownHeaders.ContentTypeHeader
+
 class NetworkRequest():
     def __init__(self, onSuccess = None, onError = None):
         super().__init__()
@@ -42,7 +46,7 @@ class NetworkRequest():
         request = QNetworkRequest(QUrl(url))
         request.setRawHeader(b"uporabnik", f"{username}".encode('utf-8'))
         request.setRawHeader(b"key", f"{password}".encode('utf-8'))
-        request.setHeader(QNetworkRequest.ContentTypeHeader, "application/json")
+        request.setHeader(_QNETWORKREQUEST_CONTENT_TYPE_HEADER, "application/json")
         
         # Send the POST request with the WKT polygon
         self.manager.post(request, QByteArray(payload.encode('utf-8')))

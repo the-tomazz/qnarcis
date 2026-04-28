@@ -44,6 +44,13 @@ _QNETWORKREPLY_NOERROR = getattr(QNetworkReply, "NoError", None)
 if _QNETWORKREPLY_NOERROR is None:
     _QNETWORKREPLY_NOERROR = QNetworkReply.NetworkError.NoError
 
+_QNETWORKREQUEST_TRANSFER_TIMEOUT_ATTRIBUTE = getattr(QNetworkRequest, "TransferTimeoutAttribute", None)
+if _QNETWORKREQUEST_TRANSFER_TIMEOUT_ATTRIBUTE is None:
+    attr_enum = getattr(QNetworkRequest, "Attribute", None)
+    _QNETWORKREQUEST_TRANSFER_TIMEOUT_ATTRIBUTE = (
+        getattr(attr_enum, "TransferTimeoutAttribute", None) if attr_enum is not None else None
+    )
+
 
 class QNarcisContentPanel:
     """Unified content panel for QNarcIS Obvestila and Pomoč tabs."""
@@ -276,7 +283,8 @@ class QNarcisContentPanel:
         try:
             request = QNetworkRequest(QUrl(url))
             try:
-                request.setAttribute(QNetworkRequest.TransferTimeoutAttribute, self.NETWORK_TIMEOUT_MS)
+                if _QNETWORKREQUEST_TRANSFER_TIMEOUT_ATTRIBUTE is not None:
+                    request.setAttribute(_QNETWORKREQUEST_TRANSFER_TIMEOUT_ATTRIBUTE, self.NETWORK_TIMEOUT_MS)
             except Exception:
                 pass
             blocking_request = QgsBlockingNetworkRequest()
@@ -526,7 +534,8 @@ class QNarcisContentPanel:
         try:
             request = QNetworkRequest(QUrl(url))
             try:
-                request.setAttribute(QNetworkRequest.TransferTimeoutAttribute, self.NETWORK_TIMEOUT_MS)
+                if _QNETWORKREQUEST_TRANSFER_TIMEOUT_ATTRIBUTE is not None:
+                    request.setAttribute(_QNETWORKREQUEST_TRANSFER_TIMEOUT_ATTRIBUTE, self.NETWORK_TIMEOUT_MS)
             except Exception:
                 pass
             blocking_request = QgsBlockingNetworkRequest()

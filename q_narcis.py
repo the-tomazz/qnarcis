@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 /***************************************************************************
  QNarcis
@@ -21,10 +21,14 @@
  *                                                                         *
  ***************************************************************************/
 """
-from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, Qt, QSortFilterProxyModel, QAbstractTableModel, QUrl, QModelIndex
+from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, Qt, QSortFilterProxyModel, QAbstractTableModel, QUrl, QModelIndex, QEvent, QTimer, QItemSelectionModel
 from qgis.PyQt.QtGui import QIcon, QStandardItemModel, QStandardItem, QDesktopServices, QColor, QFont, QPalette
+try:
+    from qgis.PyQt.QtGui import QAction
+except ImportError:
+    from qgis.PyQt.QtWidgets import QAction
 from qgis.PyQt.QtWidgets import QMenu, QToolButton
-from qgis.PyQt.QtWidgets import QTabWidget, QMessageBox, QDialog, QComboBox, QCheckBox, QAction, QWidget, QTreeView, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTableView, QPushButton, QInputDialog, QProgressBar, QSizePolicy, QListWidget
+from qgis.PyQt.QtWidgets import QTabWidget, QMessageBox, QDialog, QComboBox, QCheckBox, QWidget, QTreeView, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTableView, QPushButton, QInputDialog, QProgressBar, QSizePolicy, QListWidget
 from qgis.core import QgsApplication, QgsAuthMethodConfig
 from qgis.core import QgsSettings, QgsBlockingNetworkRequest, QgsRectangle, QgsReferencedRectangle, QgsCoordinateReferenceSystem
 from qgis.PyQt.QtNetwork import QNetworkRequest
@@ -99,7 +103,7 @@ class UrlDelegate(QStyledItemDelegate):
 
     def editorEvent(self, event, model, option, index):
         # Handle the click event to open the URL
-        if event.type() == event.MouseButtonRelease and event.button() == _QT_LEFT_BUTTON:
+        if event.type() == _QT_MOUSE_BUTTON_RELEASE and event.button() == _QT_LEFT_BUTTON:
             url = index.data(_QT_USER_ROLE + 1)
             if url:
                 QDesktopServices.openUrl(QUrl(url))
@@ -113,7 +117,7 @@ class CustomDelegate(QStyledItemDelegate):
     
     def editorEvent(self, event, model, option, index):
         # Custom logic to determine if selection should be canceled
-        if event.type() == event.MouseButtonPress:
+        if event.type() == _QT_MOUSE_BUTTON_PRESS:
             qgzLayerId = self.tree_view.proxy_model.data(index, _QT_USER_ROLE+1)
             if not qgzLayerId:
                 # Return True without doing anything to cancel the selection
@@ -218,19 +222,25 @@ def _qt_right_dock_widget_area():
         return right_area
     return Qt.DockWidgetArea.RightDockWidgetArea
 
+def _qt_enum_int(value):
+    enum_value = getattr(value, 'value', None)
+    if enum_value is not None:
+        return int(enum_value)
+    return int(value)
+
 def _qt_user_role():
     user_role = getattr(Qt, 'UserRole', None)
     if user_role is not None:
-        return int(user_role)
-    return int(Qt.ItemDataRole.UserRole)
+        return _qt_enum_int(user_role)
+    return _qt_enum_int(Qt.ItemDataRole.UserRole)
 
 _QT_USER_ROLE = _qt_user_role()
 
 def _qt_display_role():
     display_role = getattr(Qt, 'DisplayRole', None)
     if display_role is not None:
-        return int(display_role)
-    return int(Qt.ItemDataRole.DisplayRole)
+        return _qt_enum_int(display_role)
+    return _qt_enum_int(Qt.ItemDataRole.DisplayRole)
 
 _QT_DISPLAY_ROLE = _qt_display_role()
 
@@ -256,6 +266,14 @@ _QT_LEFT_BUTTON = getattr(Qt, 'LeftButton', None)
 if _QT_LEFT_BUTTON is None:
     _QT_LEFT_BUTTON = Qt.MouseButton.LeftButton
 
+_QT_MOUSE_BUTTON_RELEASE = getattr(Qt, 'MouseButtonRelease', None)
+if _QT_MOUSE_BUTTON_RELEASE is None:
+    _QT_MOUSE_BUTTON_RELEASE = QEvent.Type.MouseButtonRelease
+
+_QT_MOUSE_BUTTON_PRESS = getattr(Qt, 'MouseButtonPress', None)
+if _QT_MOUSE_BUTTON_PRESS is None:
+    _QT_MOUSE_BUTTON_PRESS = QEvent.Type.MouseButtonPress
+
 _QT_HORIZONTAL = getattr(Qt, 'Horizontal', None)
 if _QT_HORIZONTAL is None:
     _QT_HORIZONTAL = Qt.Orientation.Horizontal
@@ -280,9 +298,33 @@ _QT_APP_MODAL = getattr(Qt, 'ApplicationModal', None)
 if _QT_APP_MODAL is None:
     _QT_APP_MODAL = Qt.WindowModality.ApplicationModal
 
+_QITEMSELECTIONMODEL_SELECT = getattr(QItemSelectionModel, 'Select', None)
+if _QITEMSELECTIONMODEL_SELECT is None:
+    _QITEMSELECTIONMODEL_SELECT = QItemSelectionModel.SelectionFlag.Select
+
+_QITEMSELECTIONMODEL_ROWS = getattr(QItemSelectionModel, 'Rows', None)
+if _QITEMSELECTIONMODEL_ROWS is None:
+    _QITEMSELECTIONMODEL_ROWS = QItemSelectionModel.SelectionFlag.Rows
+
 _QDIALOG_ACCEPTED = getattr(QDialog, 'Accepted', None)
 if _QDIALOG_ACCEPTED is None:
     _QDIALOG_ACCEPTED = QDialog.DialogCode.Accepted
+
+_QMESSAGEBOX_YES = getattr(QMessageBox, 'Yes', None)
+if _QMESSAGEBOX_YES is None:
+    _QMESSAGEBOX_YES = QMessageBox.StandardButton.Yes
+
+_QMESSAGEBOX_NO = getattr(QMessageBox, 'No', None)
+if _QMESSAGEBOX_NO is None:
+    _QMESSAGEBOX_NO = QMessageBox.StandardButton.No
+
+_QMESSAGEBOX_OK = getattr(QMessageBox, 'Ok', None)
+if _QMESSAGEBOX_OK is None:
+    _QMESSAGEBOX_OK = QMessageBox.StandardButton.Ok
+
+_QMESSAGEBOX_INFORMATION = getattr(QMessageBox, 'Information', None)
+if _QMESSAGEBOX_INFORMATION is None:
+    _QMESSAGEBOX_INFORMATION = QMessageBox.Icon.Information
 
 _QPALETTE_LINK_ROLE = getattr(QPalette, 'Link', None)
 if _QPALETTE_LINK_ROLE is None:
@@ -766,9 +808,32 @@ class QNarcis:
 
         if self.hasDataModel() or self.run(True):
             self.enumerateExistingLayers()
-            self.defaultLayer()
+            self._schedule_default_layer_startup()
         else:
             self.queue = self.onProjectCreated
+
+    def _schedule_default_layer_startup(self):
+        if not getattr(self, 'default_layer_enabled', False):
+            return
+
+        if getattr(self, '_default_layer_startup_scheduled', False):
+            return
+
+        self._default_layer_startup_scheduled = True
+
+        def _run():
+            self._default_layer_startup_scheduled = False
+            try:
+                self.defaultLayer()
+            except Exception:
+                QgsMessageLog.logMessage(
+                    "Startup default layer loading failed:\n{}".format(traceback.format_exc()),
+                    "QNarcIS",
+                    Qgis.Warning,
+                )
+
+        # Defer startup loading to the event loop so QGIS UI/provider state is fully ready.
+        QTimer.singleShot(0, _run)
 
     def resetModel(self, parentIndex=QModelIndex()):
         #https://stackoverflow.com/questions/33124903/how-to-iterate-through-a-qstandarditemmodel-completely
@@ -2544,10 +2609,10 @@ class QNarcis:
                 "QNarcIS",
                 f"Izbrani sloj ni v CRS EPSG:3794 (CRS izbranega sloja je: {crs_label}).\n"
                 "Ali želite vseeno nadaljevati s pošiljanjem?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
+                _QMESSAGEBOX_YES | _QMESSAGEBOX_NO,
+                _QMESSAGEBOX_NO
             )
-            if reply != QMessageBox.Yes:
+            if reply != _QMESSAGEBOX_YES:
                 return
 
         # 2) Logika izbora + potrditve
@@ -2556,7 +2621,7 @@ class QNarcis:
 
         from .selection_confirm_dialog import SendSelectionDialog
         dlg = SendSelectionDialog(layer, sel_count, parent=self.iface.mainWindow())
-        if _exec_dialog(dlg) != dlg.Accepted:
+        if _exec_dialog(dlg) != _QDIALOG_ACCEPTED:
             return
 
         selected_only = dlg.selected_only
@@ -2827,8 +2892,8 @@ class QNarcis:
                 if index.isValid():
                     proxy_index = tree.proxy_model.mapFromSource(index)
                     tree.selectionModel().select(proxy_index, 
-                    tree.selectionModel().Select | 
-                    tree.selectionModel().Rows)
+                    _QITEMSELECTIONMODEL_SELECT | 
+                    _QITEMSELECTIONMODEL_ROWS)
                     tree.setCurrentIndex(proxy_index)
                     tree.scrollTo(proxy_index) 
 
@@ -2954,12 +3019,12 @@ class QNarcis:
 
         def show_restart_required_message():
             msg = QMessageBox()
-            msg.setIcon(QMessageBox.Information)
+            msg.setIcon(_QMESSAGEBOX_INFORMATION)
             msg.setWindowTitle("Restart Required")
             msg.setText("A restart is required due to the country change.")
             msg.setInformativeText("Please save your work and restart QGIS to apply the changes.")
-            msg.setStandardButtons(QMessageBox.Ok)
-            msg.setDefaultButton(QMessageBox.Ok)
+            msg.setStandardButtons(_QMESSAGEBOX_OK)
+            msg.setDefaultButton(_QMESSAGEBOX_OK)
             _exec_dialog(msg)
 
         if result == _QDIALOG_ACCEPTED:

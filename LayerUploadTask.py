@@ -23,6 +23,10 @@ _QNETWORKREPLY_NOERROR = getattr(QNetworkReply, 'NoError', None)
 if _QNETWORKREPLY_NOERROR is None:
     _QNETWORKREPLY_NOERROR = QNetworkReply.NetworkError.NoError
 
+_QNETWORKREQUEST_CONTENT_TYPE_HEADER = getattr(QNetworkRequest, 'ContentTypeHeader', None)
+if _QNETWORKREQUEST_CONTENT_TYPE_HEADER is None:
+    _QNETWORKREQUEST_CONTENT_TYPE_HEADER = QNetworkRequest.KnownHeaders.ContentTypeHeader
+
 
 # ----------------------------- small helpers -----------------------------
 def _log(level, msg):
@@ -170,7 +174,7 @@ class _Poster(QObject):
             req = QNetworkRequest(QUrl(self._api_url))
             req.setRawHeader(b"uporabnik", self._username.encode("utf-8"))
             req.setRawHeader(b"key", self._password.encode("utf-8"))
-            req.setHeader(QNetworkRequest.ContentTypeHeader, "application/json")
+            req.setHeader(_QNETWORKREQUEST_CONTENT_TYPE_HEADER, "application/json")
             reply = self._nam.post(req, payload)
             self._inflight[reply] = (batch_idx, n_feats)
             reply.finished.connect(lambda r=reply: self._onReply(r))

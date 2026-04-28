@@ -1,9 +1,9 @@
-﻿from qgis.PyQt.QtWidgets import (QWidget, QVBoxLayout, QLineEdit, QTreeWidget, 
+from qgis.PyQt.QtWidgets import (QWidget, QVBoxLayout, QLineEdit, QTreeWidget, 
                                 QTreeWidgetItem, QProgressBar)
 from qgis.PyQt.QtCore import Qt
 from qgis.utils import iface
 from qgis.core import (QgsRasterLayer, QgsVectorLayer, QgsProject, 
-                      QgsApplication, QgsTask, QgsLayerTreeGroup)
+                      QgsApplication, QgsTask, QgsLayerTreeGroup, Qgis)
 from .qgs_requests import requests
 import json
 import os
@@ -19,6 +19,51 @@ from .gsrv_utils import findGeoserverAuthConfig, build_url_with_params
 _QT_USER_ROLE = getattr(Qt, "UserRole", None)
 if _QT_USER_ROLE is None:
     _QT_USER_ROLE = Qt.ItemDataRole.UserRole
+
+def _to_message_level(level):
+    if not isinstance(level, int):
+        return level
+
+    success = getattr(Qgis, "Success", getattr(Qgis, "Info", 0))
+    warning = getattr(Qgis, "Warning", getattr(Qgis, "Info", 0))
+    critical = getattr(Qgis, "Critical", warning)
+
+    return {
+        0: success,
+        1: warning,
+        2: critical,
+    }.get(level, getattr(Qgis, "Info", 0))
+
+def _push_message(title, text, level=0, duration=3):
+    msgbar = iface.messageBar()
+    level_value = _to_message_level(level)
+    full_text = f"{title}: {text}" if title else str(text)
+
+    try:
+        msgbar.pushMessage(title, text, level=level_value, duration=duration)
+        return
+    except TypeError:
+        pass
+
+    try:
+        msgbar.pushMessage(title, text, level_value, duration)
+        return
+    except TypeError:
+        pass
+
+    try:
+        msgbar.pushMessage(full_text, level=level_value, duration=duration)
+        return
+    except TypeError:
+        pass
+
+    try:
+        msgbar.pushMessage(full_text, level_value, duration)
+        return
+    except TypeError:
+        pass
+
+    msgbar.pushMessage(full_text)
 
 class DownloadTask(QgsTask):
     """QgsTask for downloading JSON data in the background"""
@@ -68,9 +113,9 @@ class DownloadTask(QgsTask):
     def finished(self, result):
         if result:
             if self.changed:
-                iface.messageBar().pushMessage("QNarcIS", "Katalog vrst je uspešno naložen.", level=0, duration=3)
+                _push_message("QNarcIS", "Katalog vrst je uspešno naložen.", level=0, duration=3)
         else:
-            iface.messageBar().pushMessage("Napaka", f"Neuspešno pridobivanje kataloga vrst: {str(self.exception)}", level=2, duration=5)
+            _push_message("Napaka", f"Neuspešno pridobivanje kataloga vrst: {str(self.exception)}", level=2, duration=5)
 
 class Taksoni(QWidget):
     loginRequested = pyqtSignal(bool)
@@ -90,7 +135,7 @@ class Taksoni(QWidget):
                     self.data = json.load(f)
                     self.populate_tree(self.current_filter)
             except Exception as e:
-                iface.messageBar().pushMessage("Napaka", f"Napaka pri nalaganju cache kataloga vrst: {e}", level=1, duration=5)
+                _push_message("Napaka", f"Napaka pri nalaganju cache kataloga vrst: {e}", level=1, duration=5)
         
         # Start background download
         self.start_download()
@@ -137,7 +182,7 @@ class Taksoni(QWidget):
     def on_download_failed(self):
         self.hide_busy_row()
         if not self.data:
-            iface.messageBar().pushMessage(
+            _push_message(
                 "QNarcIS",
                 "Katalog vrst ni na voljo (ni povezave in ni lokalnega predpomnilnika), zato je seznam prazen.",
                 level=1,
@@ -205,7 +250,7 @@ class Taksoni(QWidget):
     def on_item_double_clicked(self, item):
         keys = self.get_item_keys(item)
         if not keys:
-            iface.messageBar().pushMessage("QNarcIS", "Za izbrano vrsto ne najdem identifikatorja.", level=1, duration=5)
+            _push_message("QNarcIS", "Za izbrano vrsto ne najdem identifikatorja.", level=1, duration=5)
             return
 
         self.loginRequested.emit(True)
@@ -489,7 +534,7 @@ class Taksoni(QWidget):
                 if node:
                     node.setExpanded(False)
 
-                iface.messageBar().pushMessage(
+                _push_message(
                     "QNarciIS",
                     f"Sloj '{layer_name}' ({svc}) je bil uspešno dodan.",
                     level=0,
@@ -497,7 +542,7 @@ class Taksoni(QWidget):
                 )
                 return layer
             else:
-                iface.messageBar().pushMessage(
+                _push_message(
                     "Napaka",
                     f"Napaka pri nalaganju {svc} sloja. Naloženi sloj ni veljaven.",
                     level=2,
@@ -505,7 +550,7 @@ class Taksoni(QWidget):
                 )
                 return None
         except Exception as e:
-            iface.messageBar().pushMessage(
+            _push_message(
                 "Napaka",
                 f"Napaka pri nalaganju {svc} sloja: {str(e)}",
                 level=2,
@@ -543,4 +588,3 @@ class Taksoni(QWidget):
             self.tree.takeTopLevelItem(idx)
         self.loading_item = None
         self.loading_bar = None
-
