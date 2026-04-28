@@ -5,6 +5,26 @@ from qgis.PyQt.QtWidgets import (
 
 _PREFERRED_NAMES = ["fid", "id", "gid", "oid", "eid", "object_id", "featureid"]
 
+_QT_HORIZONTAL = getattr(Qt, "Horizontal", None)
+if _QT_HORIZONTAL is None:
+    _QT_HORIZONTAL = Qt.Orientation.Horizontal
+
+_QFRAME_HLINE = getattr(QFrame, "HLine", None)
+if _QFRAME_HLINE is None:
+    _QFRAME_HLINE = QFrame.Shape.HLine
+
+_QFRAME_PLAIN = getattr(QFrame, "Plain", None)
+if _QFRAME_PLAIN is None:
+    _QFRAME_PLAIN = QFrame.Shadow.Plain
+
+_QDIALOGBUTTONBOX_YES = getattr(QDialogButtonBox, "Yes", None)
+if _QDIALOGBUTTONBOX_YES is None:
+    _QDIALOGBUTTONBOX_YES = QDialogButtonBox.StandardButton.Yes
+
+_QDIALOGBUTTONBOX_NO = getattr(QDialogButtonBox, "No", None)
+if _QDIALOGBUTTONBOX_NO is None:
+    _QDIALOGBUTTONBOX_NO = QDialogButtonBox.StandardButton.No
+
 _HELPER_TEXT_COMBO = (
     "Ob prenosu sloja se kot enolični identifikator posameznih objektov privzeto "
     "uporabi atribut z imenom <b>fid</b>. Izbrani sloj tega atributa nima, zato "
@@ -84,8 +104,8 @@ class SendSelectionDialog(QDialog):
             vbox.addLayout(form)
 
         line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Plain)
+        line.setFrameShape(_QFRAME_HLINE)
+        line.setFrameShadow(_QFRAME_PLAIN)
         line.setStyleSheet("color: #000000; background: #000000; max-height: 1px; margin-top: 8px; margin-bottom: 6px;")
         vbox.addWidget(line)
 
@@ -98,7 +118,11 @@ class SendSelectionDialog(QDialog):
         lbl_question.setStyleSheet("margin-bottom: 8px;")
         vbox.addWidget(lbl_question)
 
-        btns = QDialogButtonBox(QDialogButtonBox.Yes | QDialogButtonBox.No, Qt.Horizontal, self)
+        btns = QDialogButtonBox(
+            _QDIALOGBUTTONBOX_YES | _QDIALOGBUTTONBOX_NO,
+            _QT_HORIZONTAL,
+            self,
+        )
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         vbox.addWidget(btns)

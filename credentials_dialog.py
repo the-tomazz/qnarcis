@@ -1,5 +1,25 @@
 from qgis.PyQt import QtWidgets, QtGui
-from qgis.PyQt.QtCore import QRegExp
+from qgis.PyQt.QtCore import QRegularExpression
+
+_QSIZEPOLICY_MINIMUM = getattr(QtWidgets.QSizePolicy, "Minimum", None)
+if _QSIZEPOLICY_MINIMUM is None:
+    _QSIZEPOLICY_MINIMUM = QtWidgets.QSizePolicy.Policy.Minimum
+
+_QSIZEPOLICY_EXPANDING = getattr(QtWidgets.QSizePolicy, "Expanding", None)
+if _QSIZEPOLICY_EXPANDING is None:
+    _QSIZEPOLICY_EXPANDING = QtWidgets.QSizePolicy.Policy.Expanding
+
+_QLINEEDIT_PASSWORD = getattr(QtWidgets.QLineEdit, "Password", None)
+if _QLINEEDIT_PASSWORD is None:
+    _QLINEEDIT_PASSWORD = QtWidgets.QLineEdit.EchoMode.Password
+
+_QLINEEDIT_NORMAL = getattr(QtWidgets.QLineEdit, "Normal", None)
+if _QLINEEDIT_NORMAL is None:
+    _QLINEEDIT_NORMAL = QtWidgets.QLineEdit.EchoMode.Normal
+
+_QLINEEDIT_TRAILING_POSITION = getattr(QtWidgets.QLineEdit, "TrailingPosition", None)
+if _QLINEEDIT_TRAILING_POSITION is None:
+    _QLINEEDIT_TRAILING_POSITION = QtWidgets.QLineEdit.ActionPosition.TrailingPosition
 
 class PasswordEdit(QtWidgets.QLineEdit):
     """
@@ -23,21 +43,21 @@ class PasswordEdit(QtWidgets.QLineEdit):
         self.hiddenIcon = QtGui.QIcon(":/plugins/q_narcis/icons/eye-slash-svgrepo-com.svg")    # Hide password
         
         # Set initial state to password hidden
-        self.setEchoMode(QtWidgets.QLineEdit.Password)
+        self.setEchoMode(_QLINEEDIT_PASSWORD)
         self.password_shown = False
         
         # Add the eye icon inside the text box
-        self.togglePasswordAction = self.addAction(self.hiddenIcon, QtWidgets.QLineEdit.TrailingPosition)
+        self.togglePasswordAction = self.addAction(self.hiddenIcon, _QLINEEDIT_TRAILING_POSITION)
         self.togglePasswordAction.triggered.connect(self.on_toggle_password_Action)
 
     def on_toggle_password_Action(self):
         """Toggle password visibility on icon click."""
         if not self.password_shown:
-            self.setEchoMode(QtWidgets.QLineEdit.Normal)
+            self.setEchoMode(_QLINEEDIT_NORMAL)
             self.password_shown = True
             self.togglePasswordAction.setIcon(self.visibleIcon)
         else:
-            self.setEchoMode(QtWidgets.QLineEdit.Password)
+            self.setEchoMode(_QLINEEDIT_PASSWORD)
             self.password_shown = False
             self.togglePasswordAction.setIcon(self.hiddenIcon)
 
@@ -77,7 +97,7 @@ zaščiteni z geslom, ki v splošnem ni enako kot geslo za NarcIS portal <b>(mas
         self.custom_text.setWordWrap(True)
         layout.addRow(self.custom_text)
 
-        spacer = QtWidgets.QSpacerItem(20, 10, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
+        spacer = QtWidgets.QSpacerItem(20, 10, _QSIZEPOLICY_MINIMUM, _QSIZEPOLICY_EXPANDING)
         layout.addItem(spacer)
         
         # OK and Cancel buttons
@@ -105,10 +125,10 @@ zaščiteni z geslom, ki v splošnem ni enako kot geslo za NarcIS portal <b>(mas
         email = self.username_input.text()
         
         # Define a basic email validation regex pattern
-        email_regex = QRegExp(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+        email_regex = QRegularExpression(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
         
         # Check if the email is valid
-        if not email_regex.exactMatch(email):
+        if not email_regex.match(email).hasMatch():
             # Show an error message if the email is not valid
             QtWidgets.QMessageBox.warning(self, "NAPAKA: vnos elektronskega naslova", "Prosim vnesite veljaven elektronski naslov.")
         else:

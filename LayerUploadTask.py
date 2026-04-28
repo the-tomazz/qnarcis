@@ -11,6 +11,22 @@ from qgis.PyQt.QtCore import (
 )
 from qgis.PyQt.QtNetwork import QNetworkRequest, QNetworkReply
 
+_QT_ISO_DATE = getattr(Qt, 'ISODate', None)
+if _QT_ISO_DATE is None:
+    _QT_ISO_DATE = Qt.DateFormat.ISODate
+
+_QT_QUEUED_CONNECTION = getattr(Qt, 'QueuedConnection', None)
+if _QT_QUEUED_CONNECTION is None:
+    _QT_QUEUED_CONNECTION = Qt.ConnectionType.QueuedConnection
+
+_QNETWORKREPLY_NOERROR = getattr(QNetworkReply, 'NoError', None)
+if _QNETWORKREPLY_NOERROR is None:
+    _QNETWORKREPLY_NOERROR = QNetworkReply.NetworkError.NoError
+
+_QNETWORKREQUEST_CONTENT_TYPE_HEADER = getattr(QNetworkRequest, 'ContentTypeHeader', None)
+if _QNETWORKREQUEST_CONTENT_TYPE_HEADER is None:
+    _QNETWORKREQUEST_CONTENT_TYPE_HEADER = QNetworkRequest.KnownHeaders.ContentTypeHeader
+
 
 # ----------------------------- small helpers -----------------------------
 def _log(level, msg):
@@ -56,7 +72,7 @@ def _to_jsonable(v):
     except Exception:
         pass
     if v is None or isinstance(v, (bool, int, float, str)): return v
-    if isinstance(v, (QDateTime, QDate, QTime)): return v.toString(Qt.ISODate)
+    if isinstance(v, (QDateTime, QDate, QTime)): return v.toString(_QT_ISO_DATE)
     if isinstance(v, QtBA):
         try: return bytes(v).decode("utf-8")
         except Exception: return bytes(v).hex()
@@ -158,7 +174,7 @@ class _Poster(QObject):
             req = QNetworkRequest(QUrl(self._api_url))
             req.setRawHeader(b"uporabnik", self._username.encode("utf-8"))
             req.setRawHeader(b"key", self._password.encode("utf-8"))
-            req.setHeader(QNetworkRequest.ContentTypeHeader, "application/json")
+            req.setHeader(_QNETWORKREQUEST_CONTENT_TYPE_HEADER, "application/json")
             reply = self._nam.post(req, payload)
             self._inflight[reply] = (batch_idx, n_feats)
             reply.finished.connect(lambda r=reply: self._onReply(r))
@@ -167,7 +183,7 @@ class _Poster(QObject):
         from qgis.utils import iface
         from qgis.PyQt.QtWidgets import QPushButton
         batch_idx, n_feats = self._inflight.pop(reply, (-1, 0))
-        ok = (reply.error() == QNetworkReply.NoError)
+        ok = (reply.error() == _QNETWORKREPLY_NOERROR)
         data = reply.readAll().data()  # bytes
         try:
             resp = json.loads((data or b"{}").decode("utf-8", errors="ignore"))
@@ -280,8 +296,8 @@ class LayerUploadTask(QgsTask):
 
         # Poster in MAIN thread + wiring
         self._poster = _Poster(self._api_url, self._username, self._password, self._max_concurrent, parent=QgsApplication.instance())
-        self.postRequested.connect(self._poster.onPostRequested, Qt.QueuedConnection)
-        self._poster.batchFinished.connect(self._on_batch_replied, Qt.QueuedConnection)
+        self.postRequested.connect(self._poster.onPostRequested, _QT_QUEUED_CONNECTION)
+        self._poster.batchFinished.connect(self._on_batch_replied, _QT_QUEUED_CONNECTION)
 
         # Permanent “task started” message (closed on finish)
         try:

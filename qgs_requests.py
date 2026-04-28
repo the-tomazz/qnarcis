@@ -8,6 +8,10 @@ from qgis.core import QgsBlockingNetworkRequest
 from qgis.PyQt.QtCore import QUrl
 from qgis.PyQt.QtNetwork import QNetworkRequest
 
+_QNETWORKREQUEST_HTTP_STATUS_CODE_ATTRIBUTE = getattr(QNetworkRequest, 'HttpStatusCodeAttribute', None)
+if _QNETWORKREQUEST_HTTP_STATUS_CODE_ATTRIBUTE is None:
+    _QNETWORKREQUEST_HTTP_STATUS_CODE_ATTRIBUTE = QNetworkRequest.Attribute.HttpStatusCodeAttribute
+
 
 class _QgsResponse:
     """
@@ -31,7 +35,7 @@ class _QgsResponse:
 
         status = None
         try:
-            status = self._reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
+            status = self._reply.attribute(_QNETWORKREQUEST_HTTP_STATUS_CODE_ATTRIBUTE)
         except Exception:
             status = None
 
