@@ -690,6 +690,7 @@ class QNarcis:
         self.qgz_version = None
 
         self.geoserver_credentials = None
+        self._cred_save_task = None
 
         # initialize plugin directory
         self.plugin_dir = os.path.dirname(__file__)
@@ -1583,7 +1584,7 @@ class QNarcis:
                 
                 creds = self.geoserver_credentials
                 
-                diff = get_wms_layers_difference(source, providerKey, creds.get('user'), creds.get('key'))
+                diff = get_wms_layers_difference(source, providerKey, auth_id)
 
                 def get_layer_data_from_root_type_name(locked_layers, diff, providerKey):
 
@@ -2487,16 +2488,23 @@ class QNarcis:
             return False
 
         def _on_finished(task):
-            ok = getattr(task, "taskFunResult", False)
-            if ok:
+            try:
+                ok = getattr(task, "taskFunResult", False)
+                if ok:
+                    try:
+                        self.addConfig(uname, pwd)
+                    except Exception:
+                        pass
+            finally:
                 try:
-                    self.addConfig(uname, pwd)
+                    if getattr(self, "_cred_save_task", None) is task:
+                        self._cred_save_task = None
                 except Exception:
-                    pass
+                    self._cred_save_task = None
 
-        QgsApplication.taskManager().addTask(
-            QNarcisTask(self.tr("Preverjanje prijave"), _check, [uname, pwd], _on_finished)
-        )
+        cred_task = QNarcisTask(self.tr("Preverjanje prijave"), _check, [uname, pwd], _on_finished)
+        self._cred_save_task = cred_task
+        QgsApplication.taskManager().addTask(cred_task)
 
     def getCredentials(self):
         am  = QgsApplication.authManager()
@@ -2604,16 +2612,13 @@ class QNarcis:
             if layer_crs is not None and layer_crs.isValid():
                 crs_label = layer_crs.authid() or "neznan CRS"
 
-            reply = QMessageBox.warning(
+            QMessageBox.warning(
                 self.iface.mainWindow(),
                 "QNarcIS",
-                f"Izbrani sloj ni v CRS EPSG:3794 (CRS izbranega sloja je: {crs_label}).\n"
-                "Ali želite vseeno nadaljevati s pošiljanjem?",
-                _QMESSAGEBOX_YES | _QMESSAGEBOX_NO,
-                _QMESSAGEBOX_NO
+                f"Napačen CRS sloja za pošiljanje ({crs_label}). Sistem sprejema le sloje v CRS EPSG:3794.",
+                _QMESSAGEBOX_OK
             )
-            if reply != _QMESSAGEBOX_YES:
-                return
+            return
 
         # 2) Logika izbora + potrditve
         selected_only = True
@@ -2626,6 +2631,28 @@ class QNarcis:
 
         selected_only = dlg.selected_only
         fid_field_name = dlg.fid_field_name  # None => uporabi feature.id()
+
+        # 2b) Preverjanje imen atributov (server ne podpira nenavadnih imen)
+        excluded_field_names = []
+        field_names = [f.name() for f in layer.fields()]
+        invalid_field_names = []
+        for name in field_names:
+            nm = str(name or "")
+            if not nm or not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', nm):
+                invalid_field_names.append(nm)
+
+        if invalid_field_names:
+            bad_name = invalid_field_names[0] if invalid_field_names[0] else "<prazno>"
+            reply = QMessageBox.warning(
+                self.iface.mainWindow(),
+                "QNarcIS",
+                f"Sloj, ki ga pošiljate ima neveljavno ime atributa ({bad_name}). Ali želite poslati sloj brez tega atributa?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+            excluded_field_names = invalid_field_names
 
         # 3) Poverilnice (obstoječi pristop)
         uname, pwd, cfg = self.getCredentials()
@@ -2645,6 +2672,7 @@ class QNarcis:
             )
 
             setattr(t, "fid_field_name", fid_field_name)
+            setattr(t, "excluded_field_names", excluded_field_names)
 
             self._upload_running = True
 

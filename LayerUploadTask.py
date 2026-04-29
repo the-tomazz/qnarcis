@@ -109,6 +109,8 @@ class _Poster(QObject):
         self._queue = []             # list of (batch_idx, n_feats, QByteArray)
         self._popup_shown = False    # show the first “error” popup only once
         self._canceled = False       # NEW: stop starting new and suppress UI popups after cancel
+        self._server_limit_detected = False
+        self._server_limit_message = None
     
     def restore_timeout(self):
         if hasattr(self, '_original_timeout'):
@@ -157,6 +159,31 @@ class _Poster(QObject):
             except Exception:
                 pass
 
+    def _detect_server_units_limit(self, resp):
+        try:
+            if not isinstance(resp, dict):
+                return None
+
+            status_text = str(resp.get("Status", "") or "")
+            msg_text = str(
+                resp.get("Sporočilo")
+                or resp.get("Sporocilo")
+                or resp.get("message")
+                or resp.get("error")
+                or resp.get("detail")
+                or resp.get("msg")
+                or ""
+            )
+
+            text = (status_text + " " + msg_text).lower()
+            if "geometrij" in text and ("manj kot" in text or "presega" in text or "limit" in text):
+                return msg_text or "Strežnik je zavrnil pošiljanje zaradi omejitve geometrijskih enot."
+            if "ora-20000" in text and "geometrij" in text:
+                return msg_text or "Strežnik je zavrnil pošiljanje zaradi omejitve geometrijskih enot."
+        except Exception:
+            pass
+        return None
+
     @pyqtSlot(int, int, QByteArray)
     def onPostRequested(self, batch_idx, n_feats, payload):
         """Called from the task thread (QueuedConnection)."""
@@ -189,6 +216,23 @@ class _Poster(QObject):
             resp = json.loads((data or b"{}").decode("utf-8", errors="ignore"))
         except Exception:
             resp = {}
+
+        server_limit_msg = None
+        if not self._canceled:
+            server_limit_msg = self._detect_server_units_limit(resp)
+            if server_limit_msg:
+                self._server_limit_detected = True
+                self._server_limit_message = str(server_limit_msg)
+                try:
+                    resp = dict(resp) if isinstance(resp, dict) else {}
+                except Exception:
+                    resp = {}
+                resp["_qnarcis_server_limit"] = True
+                resp["_qnarcis_server_limit_message"] = self._server_limit_message
+                ok = False
+                _log(Qgis.Warning, f"Pošiljanje je bilo prekinjeno zaradi omejitve na strežniku: {self._server_limit_message}")
+                self.cancel_all()
+
         reply.deleteLater()
 
         # If we were canceled, just propagate result (as error if aborted) and do nothing else.
@@ -285,6 +329,9 @@ class LayerUploadTask(QgsTask):
         self._invalid_features = 0
         self._units_count = 0
         self._hit_units_limit = False
+        self._hit_server_units_limit = False
+        self._server_units_limit_message = ""
+        self._invalid_geometry_precheck_failed = False
 
         # batch buffer
         self._prefix = b""
@@ -303,7 +350,7 @@ class LayerUploadTask(QgsTask):
         try:
             from qgis.utils import iface
             self._start_msg_item = iface.messageBar().createMessage(
-                "QNarcIS", "Pošiljanje sloja se je začelo …"
+                "QNarcIS", "Preverjam veljavnost geometrije objektov."
             )
             iface.messageBar().pushWidget(self._start_msg_item, Qgis.Info)
         except Exception:
@@ -336,6 +383,9 @@ class LayerUploadTask(QgsTask):
 
             self._bbox = _bbox_array(self._layer, self._xform)
             self._field_names = [f.name() for f in self._layer.fields()]
+            excluded_field_names = set(getattr(self, "excluded_field_names", []) or [])
+            if excluded_field_names:
+                self._field_names = [n for n in self._field_names if n not in excluded_field_names]
 
             # Deterministic feature count for progress
             try:
@@ -348,12 +398,37 @@ class LayerUploadTask(QgsTask):
 
             self._total_batches = math.ceil(self._total_features / float(self._batch_size)) if self._total_features else 0
 
+            # Preflight geometry validation in background: if any geometry is invalid, abort before posting.
+            precheck_it = (iter(self._layer.selectedFeatures()) if self._selected_only else self._layer.getFeatures())
+            while True:
+                if self.isCanceled():
+                    try:
+                        self._poster.cancel_all()
+                    except Exception:
+                        pass
+                    return False
+                try:
+                    feat = next(precheck_it)
+                except StopIteration:
+                    break
+
+                g = feat.geometry()
+                try:
+                    problems = g.validateGeometry(QgsGeometry.ValidatorGeos)
+                except Exception:
+                    problems = []
+                if problems:
+                    self._invalid_geometry_precheck_failed = True
+                    return False
+
+                QThread.msleep(0)
+
             self.setProgress(0.0)
             self._start_new_batch()
 
             it = (iter(self._layer.selectedFeatures()) if self._selected_only else self._layer.getFeatures())
             while True:
-                if self.isCanceled():
+                if self.isCanceled() or getattr(self._poster, "_canceled", False):
                     # hard stop: also abort any network activity
                     try:
                         self._poster.cancel_all()
@@ -369,20 +444,6 @@ class LayerUploadTask(QgsTask):
                     break
 
                 g = feat.geometry()
-
-                # Invalid geometries: log to QNarcIS tab and skip
-                try:
-                    problems = g.validateGeometry(QgsGeometry.ValidatorGeos)
-                except Exception:
-                    problems = []
-                if problems:
-                    self._invalid_features += 1
-                    try:
-                        what = ", ".join([e.what() for e in problems])
-                    except Exception:
-                        what = "Neveljavna geometrija"
-                    _log(Qgis.Warning, f"Preskočena neveljavna geometrija (feature id={feat.id()}): {what}")
-                    continue
 
                 # Enforce max_units_limit
                 parts = _parts_in(g, self._geom_type)
@@ -432,7 +493,7 @@ class LayerUploadTask(QgsTask):
 
             # Wait for all replies (unless canceled)
             while self._posted_batches > self._replied_batches:
-                if self.isCanceled():
+                if self.isCanceled() or getattr(self._poster, "_canceled", False):
                     try:
                         self._poster.cancel_all()
                     except Exception:
@@ -466,6 +527,27 @@ class LayerUploadTask(QgsTask):
         except Exception:
             pass
 
+        if self._invalid_geometry_precheck_failed:
+            msg = "Geometrije nekaterih objektov za pošiljanje niso veljavne. Vsi objekti za pošiljanje morajo imeti veljavno geometrijo."
+            try:
+                from qgis.PyQt.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    iface.mainWindow(),
+                    "QNarcIS",
+                    msg,
+                    QMessageBox.Ok
+                )
+            except Exception:
+                pass
+            _log(Qgis.Warning, msg)
+            self._poster.restore_timeout()
+            return
+
+        if getattr(self._poster, "_server_limit_detected", False):
+            self._hit_server_units_limit = True
+            if not self._server_units_limit_message:
+                self._server_units_limit_message = str(getattr(self._poster, "_server_limit_message", "") or "")
+
         # Compose final sticky message (UI) + ensure details are in QNarcIS log
         total_feats = self._total_features if self._total_features else self._target_features
         ok = self._ok_features
@@ -482,6 +564,10 @@ class LayerUploadTask(QgsTask):
                 text += " Podrobnosti poglejte v dnevniku napak."
             if skipped:
                 text += f" {skipped} neveljavnih geometrij je bilo preskočenih."
+            if self._hit_server_units_limit:
+                if self._server_units_limit_message:
+                    text += f" {self._server_units_limit_message}"
+                text += " Pošiljanje je bilo prekinjeno."
             if self._hit_units_limit and self._max_units_limit is not None:
                 text += f" Dosežen je bil trenutno dovoljen limit {int(self._max_units_limit)} objektov; pošiljanje je bilo ustavljeno."
             level = Qgis.Success if err == 0 and result and not self._hit_units_limit else Qgis.Warning
@@ -490,6 +576,7 @@ class LayerUploadTask(QgsTask):
 
         # Log final summary to QNarcIS tab as well
         _log(level, text)
+        need_log_button = (err > 0)
 
         # NEW: If at least one feature succeeded and we have a layer_id, show a link button
         if ok > 0 and self._layer_id is not None:
@@ -502,6 +589,10 @@ class LayerUploadTask(QgsTask):
                 btn = QPushButton("Povezava do naloženega sloja.")
                 btn.clicked.connect(lambda: QDesktopServices.openUrl(url))
                 msgw.layout().addWidget(btn)
+                if need_log_button:
+                    btn_log = QPushButton("Odpri dnevnik")
+                    btn_log.clicked.connect(self._poster._open_qnarcis_log)
+                    msgw.layout().addWidget(btn_log)
 
                 iface.messageBar().pushWidget(msgw, level)
             except Exception:
@@ -511,9 +602,16 @@ class LayerUploadTask(QgsTask):
                 except Exception:
                     pass
         else:
-            # Original behavior when there’s nothing to link to
             try:
-                iface.messageBar().pushMessage(title, text, level=level, duration=0)
+                if need_log_button:
+                    from qgis.PyQt.QtWidgets import QPushButton
+                    msgw = iface.messageBar().createMessage(title, text)
+                    btn_log = QPushButton("Odpri dnevnik")
+                    btn_log.clicked.connect(self._poster._open_qnarcis_log)
+                    msgw.layout().addWidget(btn_log)
+                    iface.messageBar().pushWidget(msgw, level)
+                else:
+                    iface.messageBar().pushMessage(title, text, level=level, duration=0)
             except Exception:
                 pass
 
@@ -568,6 +666,11 @@ class LayerUploadTask(QgsTask):
     @pyqtSlot(int, int, bool, dict)
     def _on_batch_replied(self, batch_idx, n_feats, ok, resp):
         self._replied_batches += 1
+        if isinstance(resp, dict) and resp.get("_qnarcis_server_limit"):
+            self._hit_server_units_limit = True
+            msg = resp.get("_qnarcis_server_limit_message")
+            if msg:
+                self._server_units_limit_message = str(msg)
         if ok:
             self._ok_features += n_feats
             # remember layer_id if provided (same for the whole session)

@@ -1,11 +1,59 @@
-import base64
 from .qgs_requests import requests
 from lxml import etree
 
-from qgis.core import QgsApplication
+from qgis.core import QgsApplication, QgsNetworkAccessManager
+from qgis.PyQt.QtCore import QUrl
+from qgis.PyQt.QtNetwork import QNetworkRequest
 
 import re
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, urlunsplit, urlsplit, quote
+
+_QNETWORKREQUEST_HTTP_STATUS_CODE_ATTRIBUTE = getattr(QNetworkRequest, 'HttpStatusCodeAttribute', None)
+if _QNETWORKREQUEST_HTTP_STATUS_CODE_ATTRIBUTE is None:
+    _QNETWORKREQUEST_HTTP_STATUS_CODE_ATTRIBUTE = QNetworkRequest.Attribute.HttpStatusCodeAttribute
+
+class _QgsNetworkResponse:
+    def __init__(self, status_code, content, reason="", error_code=None):
+        self.status_code = int(status_code or 0)
+        self.content = content or b""
+        self.text = self.content.decode("utf-8", errors="replace")
+        self.reason = reason or ("HTTP {0}".format(self.status_code) if self.status_code else "")
+        self._error_code = error_code
+
+    @property
+    def ok(self):
+        return 200 <= (self.status_code or 0) < 400
+
+    def raise_for_status(self):
+        try:
+            error_code = int(self._error_code)
+        except Exception:
+            error_code = int(getattr(self._error_code, 'value', 0) or 0)
+        if error_code:
+            raise Exception(self.reason or "Network error")
+        if 400 <= (self.status_code or 0):
+            raise Exception(self.reason or "HTTP {0}".format(self.status_code))
+
+def _qgs_auth_get(url, authcfg):
+    req = QNetworkRequest(QUrl(url))
+    reply = QgsNetworkAccessManager.blockingGet(req, authcfg or '', True)
+    try:
+        status = reply.attribute(_QNETWORKREQUEST_HTTP_STATUS_CODE_ATTRIBUTE)
+    except Exception:
+        status = 0
+    try:
+        content = bytes(reply.content())
+    except Exception:
+        content = b""
+    try:
+        reason = reply.errorString()
+    except Exception:
+        reason = ""
+    try:
+        error_code = reply.error()
+    except Exception:
+        error_code = None
+    return _QgsNetworkResponse(status, content, reason, error_code)
 
 def build_url_with_params(base_url, extra):
     """
@@ -100,13 +148,10 @@ def get_layers_from_capabilities(xml_text, provider_key):
     return {layer.text.strip() for layer in layers if layer is not None and layer.text}
 
 
-def get_wms_layers_difference(source, provider_key, username, password):
+def get_wms_layers_difference(source, provider_key, authcfg):
 
     url = build_getcap_url(source, provider_key)
-    
-    credentials = f"{username}:{password}"
-    b64_auth = base64.b64encode(credentials.encode("utf-8")).decode("utf-8")
-    
+
     # Step 1: No-auth request
     response_no_auth = requests.get(url)
     try:
@@ -115,10 +160,8 @@ def get_wms_layers_difference(source, provider_key, username, password):
         raise Exception(f"Unauthenticated request failed: {exc}") from exc
     layers_no_auth = get_layers_from_capabilities(response_no_auth.text, provider_key)
 
-    # Step 2: Authenticated request with raw base64 header
-    headers_with_auth = {'Authorization': f"Basic {b64_auth}"}
-
-    response_auth = requests.get(url, headers=headers_with_auth)
+    # Step 2: Authenticated request through QGIS auth manager.
+    response_auth = _qgs_auth_get(url, authcfg)
     try:
         response_auth.raise_for_status()
     except Exception as exc:
