@@ -1560,15 +1560,18 @@ class QNarcis:
         return _URL_RE.sub(repl, source)
     
     def handleTreeItemClick(self, layerName, qgzLayerId, modelIndex, model, callback=None, show_errors=True, mark_tree_status=True):
-        if qgzLayerId and layerName in self.layers:
+        if qgzLayerId and (layerName in self.layers or layerName in self.locked_layers):
 
             if not self.layersAreEnumerated:
                 self.enumerateExistingLayers()
 
-            layerData = self.layers[layerName]
-            
+            layerData = self.layers.get(layerName)
+
             if qgzLayerId in self.locked_layers_by_id:
                 layerData = self.locked_layers_by_id[qgzLayerId]
+
+            if layerData is None:
+                return False
 
             source = layerData['source']
             providerKey = layerData['providerKey']
