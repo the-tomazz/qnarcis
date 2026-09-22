@@ -79,13 +79,23 @@ class _QgsResponse:
         return 200 <= (self.status_code or 0) < 400
 
 
+def _apply_header(req, key, value):
+    try:
+        req.setRawHeader(
+            str(key).encode("utf-8"),
+            str(value).encode("utf-8"),
+        )
+    except Exception:
+        return
+
+
 def _apply_headers(req, headers):
     if not headers:
         return
     for k, v in headers.items():
         if v is None:
             continue
-        req.setRawHeader(str(k).encode("utf-8"), str(v).encode("utf-8"))
+        _apply_header(req, k, v)
 
 
 def _apply_timeout(req, timeout):
