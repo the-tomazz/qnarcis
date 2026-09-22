@@ -85,11 +85,7 @@ def _apply_headers(req, headers):
     for k, v in headers.items():
         if v is None:
             continue
-        try:
-            req.setRawHeader(str(k).encode("utf-8"), str(v).encode("utf-8"))
-        except Exception:
-            # ignore a single bad header
-            continue
+        req.setRawHeader(str(k).encode("utf-8"), str(v).encode("utf-8"))
 
 
 def _apply_timeout(req, timeout):
