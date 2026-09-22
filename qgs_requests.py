@@ -89,7 +89,15 @@ def _apply_headers(req, headers):
             req.setRawHeader(str(k).encode("utf-8"), str(v).encode("utf-8"))
         except Exception:
             # ignore a single bad header
-            pass
+            continue
+
+
+def _apply_timeout(req, timeout):
+    try:
+        req.setTransferTimeout(int(float(timeout) * 1000))
+    except Exception:
+        # Unsupported or invalid timeouts fall back to the QGIS default.
+        return
 
 
 def get(url, headers=None, timeout=None, allow_redirects=True):
@@ -101,10 +109,7 @@ def get(url, headers=None, timeout=None, allow_redirects=True):
 
     # Best-effort per-request timeout (Qt supports setTransferTimeout in newer versions)
     if timeout is not None:
-        try:
-            req.setTransferTimeout(int(float(timeout) * 1000))
-        except Exception:
-            pass
+        _apply_timeout(req, timeout)
 
     _apply_headers(req, headers)
 

@@ -44,12 +44,38 @@ _QNETWORKREPLY_NOERROR = getattr(QNetworkReply, "NoError", None)
 if _QNETWORKREPLY_NOERROR is None:
     _QNETWORKREPLY_NOERROR = QNetworkReply.NetworkError.NoError
 
+_QGSBLOCKINGNETWORKREQUEST_NOERROR = getattr(QgsBlockingNetworkRequest, "NoError", None)
+if _QGSBLOCKINGNETWORKREQUEST_NOERROR is None:
+    _QGSBLOCKINGNETWORKREQUEST_NOERROR = QgsBlockingNetworkRequest.ErrorCode.NoError
+
+_QGIS_CRITICAL = getattr(Qgis, "Critical", None)
+if _QGIS_CRITICAL is None:
+    _QGIS_CRITICAL = Qgis.MessageLevel.Critical
+
+_QPALETTE_BASE = getattr(QPalette, "Base", None)
+if _QPALETTE_BASE is None:
+    _QPALETTE_BASE = QPalette.ColorRole.Base
+
+_QPALETTE_TEXT = getattr(QPalette, "Text", None)
+if _QPALETTE_TEXT is None:
+    _QPALETTE_TEXT = QPalette.ColorRole.Text
+
 _QNETWORKREQUEST_TRANSFER_TIMEOUT_ATTRIBUTE = getattr(QNetworkRequest, "TransferTimeoutAttribute", None)
 if _QNETWORKREQUEST_TRANSFER_TIMEOUT_ATTRIBUTE is None:
     attr_enum = getattr(QNetworkRequest, "Attribute", None)
     _QNETWORKREQUEST_TRANSFER_TIMEOUT_ATTRIBUTE = (
         getattr(attr_enum, "TransferTimeoutAttribute", None) if attr_enum is not None else None
     )
+
+
+def _apply_request_timeout(request, timeout_ms):
+    if _QNETWORKREQUEST_TRANSFER_TIMEOUT_ATTRIBUTE is None:
+        return
+    try:
+        request.setAttribute(_QNETWORKREQUEST_TRANSFER_TIMEOUT_ATTRIBUTE, timeout_ms)
+    except Exception:
+        # Older Qt/QGIS versions may expose but not support this attribute.
+        return
 
 
 class QNarcisContentPanel:
@@ -282,14 +308,10 @@ class QNarcisContentPanel:
     def _fetch_json(self, url):
         try:
             request = QNetworkRequest(QUrl(url))
-            try:
-                if _QNETWORKREQUEST_TRANSFER_TIMEOUT_ATTRIBUTE is not None:
-                    request.setAttribute(_QNETWORKREQUEST_TRANSFER_TIMEOUT_ATTRIBUTE, self.NETWORK_TIMEOUT_MS)
-            except Exception:
-                pass
+            _apply_request_timeout(request, self.NETWORK_TIMEOUT_MS)
             blocking_request = QgsBlockingNetworkRequest()
             result = blocking_request.get(request)
-            if result != QgsBlockingNetworkRequest.NoError:
+            if result != _QGSBLOCKINGNETWORKREQUEST_NOERROR:
                 raise RuntimeError(blocking_request.errorMessage())
 
             reply = blocking_request.reply()
@@ -301,7 +323,7 @@ class QNarcisContentPanel:
             self.iface.messageBar().pushMessage(
                 u"QNarcis",
                 self.tr(u"Vsebina na spletu ni dostopna.") + self.tr(u"Več informacij v QGIS message logu."),
-                level=Qgis.Critical,
+                level=_QGIS_CRITICAL,
             )
             QgsMessageLog.logMessage(f"Error loading forum content: {exc}", "QNarcIS Content")
             return None
@@ -349,8 +371,8 @@ class QNarcisContentPanel:
     def _theme_css_colors(self):
         try:
             palette = self.dockwidget.palette() if self.dockwidget is not None else self.iface.mainWindow().palette()
-            base = palette.color(QPalette.Base)
-            text = palette.color(QPalette.Text)
+            base = palette.color(_QPALETTE_BASE)
+            text = palette.color(_QPALETTE_TEXT)
 
             colors = {
                 "bg": base.name(),
@@ -533,14 +555,10 @@ class QNarcisContentPanel:
         source = html.escape(url, quote=True)
         try:
             request = QNetworkRequest(QUrl(url))
-            try:
-                if _QNETWORKREQUEST_TRANSFER_TIMEOUT_ATTRIBUTE is not None:
-                    request.setAttribute(_QNETWORKREQUEST_TRANSFER_TIMEOUT_ATTRIBUTE, self.NETWORK_TIMEOUT_MS)
-            except Exception:
-                pass
+            _apply_request_timeout(request, self.NETWORK_TIMEOUT_MS)
             blocking_request = QgsBlockingNetworkRequest()
             result = blocking_request.get(request)
-            if result == QgsBlockingNetworkRequest.NoError:
+            if result == _QGSBLOCKINGNETWORKREQUEST_NOERROR:
                 reply = blocking_request.reply()
                 if reply.error() == _QNETWORKREPLY_NOERROR:
                     content = bytes(reply.content())
@@ -549,7 +567,7 @@ class QNarcisContentPanel:
                         encoded = base64.b64encode(content).decode("ascii")
                         source = f"data:{mime_type};base64,{encoded}"
         except Exception:
-            pass
+            source = html.escape(url, quote=True)
 
         self._image_data_uri_cache[url] = source
         while len(self._image_data_uri_cache) > self.MAX_IMAGE_CACHE_ITEMS:

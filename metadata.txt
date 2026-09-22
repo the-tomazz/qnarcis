@@ -7,8 +7,8 @@ name=QNarcIS
 qgisMinimumVersion=3.28.4
 qgisMaximumVersion=4.99
 description=SL: QGIS-vticnik za informacijski sistem za naravo - NarcIS | EN: QGIS plugin for the Slovenian Nature Information System - NarcIS
-version=3.3.2
-changelog=3.3.2 (2026-09-18): fixed loading of password-protected (locked) layers that have no public variant (double-click on such layers now works).
+version=3.3.3
+changelog=3.3.3 (2026-09-22): fixed loading of password-protected (locked) layers that have no public variant (double-click now works); resolved QGIS Plugin Repository validation findings, including secure XML parsing, explicit exception handling, and QGIS 4 compatibility.
 author=Spatial mind (info@spatialmind.org) for Slovenian Environment Agency - ARSO (narcis.arso@gov.si)
 email=narcis.arso@gov.si
 

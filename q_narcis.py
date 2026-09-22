@@ -39,12 +39,8 @@ from qgis.gui import (
 # Initialize Qt resources from file resources.py
 from .resources import *
 
-import xml.etree.ElementTree as ET
+from lxml import etree as ET
 import json
-try:
-    from defusedxml import ElementTree as DefusedET
-except ImportError:
-    DefusedET = None
 
 import re
 import sys
@@ -194,23 +190,13 @@ def _normalize_qgz_version(value):
     return str(int(text))
 
 def _safe_xml_fromstring(xml_payload):
-    if DefusedET is not None:
-        return DefusedET.fromstring(xml_payload)
-
-    # Fallback for environments without defusedxml: reject DTD/entities and parse.
-    payload_text = (
-        xml_payload.decode("utf-8", errors="ignore")
-        if isinstance(xml_payload, (bytes, bytearray))
-        else str(xml_payload)
-    ).lower()
-    if "<!doctype" in payload_text or "<!entity" in payload_text:
-        raise RuntimeError("Unsafe XML payload: DTD/entities are not allowed")
-    return getattr(ET, "fromstring")(xml_payload)
+    parser = ET.XMLParser(resolve_entities=False, no_network=True, load_dtd=False)
+    root = ET.fromstring(xml_payload, parser=parser)
+    if root.getroottree().docinfo.doctype:
+        raise RuntimeError("Unsafe XML payload: DTDs are not allowed")
+    return root
 
 def _safe_xml_parse(xml_path):
-    if DefusedET is not None:
-        return DefusedET.parse(xml_path)
-
     with open(xml_path, "rb") as xml_file:
         xml_payload = xml_file.read()
     root = _safe_xml_fromstring(xml_payload)
@@ -318,6 +304,35 @@ _QMESSAGEBOX_NO = getattr(QMessageBox, 'No', None)
 if _QMESSAGEBOX_NO is None:
     _QMESSAGEBOX_NO = QMessageBox.StandardButton.No
 
+def _legacy_or_scoped_enum(legacy_owner, legacy_name, scoped_owner, scope_name, *member_names):
+    value = getattr(legacy_owner, legacy_name, None)
+    if value is not None:
+        return value
+    scope = getattr(scoped_owner, scope_name)
+    for member_name in member_names:
+        value = getattr(scope, member_name, None)
+        if value is not None:
+            return value
+    raise AttributeError("{}.{} has none of {}".format(scoped_owner.__name__, scope_name, member_names))
+
+_QGIS_INFO = _legacy_or_scoped_enum(Qgis, 'Info', Qgis, 'MessageLevel', 'Info')
+_QGIS_WARNING = _legacy_or_scoped_enum(Qgis, 'Warning', Qgis, 'MessageLevel', 'Warning')
+_QGIS_CRITICAL = _legacy_or_scoped_enum(Qgis, 'Critical', Qgis, 'MessageLevel', 'Critical')
+_QGIS_SUCCESS = _legacy_or_scoped_enum(Qgis, 'Success', Qgis, 'MessageLevel', 'Success')
+_QGS_NETWORK_NO_ERROR = _legacy_or_scoped_enum(
+    QgsBlockingNetworkRequest, 'NoError', QgsBlockingNetworkRequest, 'ErrorCode', 'NoError'
+)
+_QGIS_VECTOR_LAYER = _legacy_or_scoped_enum(
+    QgsMapLayer, 'VectorLayer', Qgis, 'LayerType', 'VectorLayer', 'Vector'
+)
+_QGIS_WKB_POINT = _legacy_or_scoped_enum(QgsWkbTypes, 'Point', Qgis, 'WkbType', 'Point')
+_QGIS_WKB_MULTIPOINT = _legacy_or_scoped_enum(QgsWkbTypes, 'MultiPoint', Qgis, 'WkbType', 'MultiPoint')
+_QGIS_WKB_LINESTRING = _legacy_or_scoped_enum(QgsWkbTypes, 'LineString', Qgis, 'WkbType', 'LineString')
+_QGIS_WKB_MULTILINESTRING = _legacy_or_scoped_enum(QgsWkbTypes, 'MultiLineString', Qgis, 'WkbType', 'MultiLineString')
+_QGIS_WKB_POLYGON = _legacy_or_scoped_enum(QgsWkbTypes, 'Polygon', Qgis, 'WkbType', 'Polygon')
+_QGIS_WKB_MULTIPOLYGON = _legacy_or_scoped_enum(QgsWkbTypes, 'MultiPolygon', Qgis, 'WkbType', 'MultiPolygon')
+_QGSTASK_COMPLETE = _legacy_or_scoped_enum(QgsTask, 'Complete', QgsTask, 'TaskStatus', 'Complete')
+
 _QMESSAGEBOX_OK = getattr(QMessageBox, 'Ok', None)
 if _QMESSAGEBOX_OK is None:
     _QMESSAGEBOX_OK = QMessageBox.StandardButton.Ok
@@ -334,7 +349,7 @@ def _exec_dialog(dialog):
     exec_method = getattr(dialog, 'exec', None)
     if callable(exec_method):
         return exec_method()
-    return dialog.exec_()
+    return getattr(dialog, 'exec_')()
 
 def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder=''):
     try:
@@ -457,7 +472,7 @@ def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder=''):
                 QgsMessageLog.logMessage(
                     f"Cached catalog archive invalid, re-downloading: {cache_exc}",
                     "QNarcIS",
-                    Qgis.Warning,
+                    _QGIS_WARNING,
                 )
                 try:
                     os.remove(cachedXzPath)
@@ -465,7 +480,7 @@ def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder=''):
                     QgsMessageLog.logMessage(
                         f"Failed to remove invalid cached archive '{cachedXzPath}': {remove_exc}",
                         "QNarcIS",
-                        Qgis.Warning,
+                        _QGIS_WARNING,
                     )
 
         if archive_path is None:
@@ -517,16 +532,20 @@ def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder=''):
                 for path in (downloadedXzPath, downloadedXzPath + ".tmp"):
                     if os.path.exists(path):
                         os.remove(path)
-        except Exception:
-            pass
+        except Exception as cleanup_exc:
+            QgsMessageLog.logMessage(
+                f"Failed to clean up catalog download after installation error: {cleanup_exc}",
+                "QNarcIS",
+                _QGIS_WARNING,
+            )
         QgsMessageLog.logMessage(
             "installQgz failed: "
             f"id={id}, drzava={drzava}, sub_folder='{sub_folder}', "
             f"url='{url}', error={exc}",
             "QNarcIS",
-            Qgis.Critical,
+            _QGIS_CRITICAL,
         )
-        QgsMessageLog.logMessage(traceback.format_exc(), "QNarcIS", Qgis.Critical)
+        QgsMessageLog.logMessage(traceback.format_exc(), "QNarcIS", _QGIS_CRITICAL)
         return None
 
     return {'id': normalized_id, 'callback': callback, 'sub_folder': sub_folder}
@@ -534,7 +553,7 @@ def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder=''):
 def urlFetchSync(url):
     request = QgsBlockingNetworkRequest()
     status = request.get(QNetworkRequest(QUrl(url)))
-    if status == QgsBlockingNetworkRequest.NoError:
+    if status == _QGS_NETWORK_NO_ERROR:
         reply = request.reply()
         content = reply.content()
         return json.loads(content.data().decode())
@@ -740,6 +759,9 @@ class QNarcis:
         self.layers = {}
         self.layers_by_identity = {}  # normalized composite key -> [layer definitions]
         self.layerTreeIndexByTreeItemId = {}
+        # lxml element attributes must stay strings, so non-string metadata
+        # (QgsLayerTreeGroup objects) is kept here, keyed by xml element.
+        self._xml_group_by_element = {}
 
         s = QgsSettings()
         plugin_version = s.value('q_narcis/plugin_version', None)
@@ -830,7 +852,7 @@ class QNarcis:
                 QgsMessageLog.logMessage(
                     "Startup default layer loading failed:\n{}".format(traceback.format_exc()),
                     "QNarcIS",
-                    Qgis.Warning,
+                    _QGIS_WARNING,
                 )
 
         # Defer startup loading to the event loop so QGIS UI/provider state is fully ready.
@@ -889,11 +911,13 @@ class QNarcis:
                 continue
 
             layerDefinition['layer'] = layer
-            self.layerTreeIndexByTreeItemId[layer.id()] = layerDefinition['xmlitem'].attrib['__ginx___']
+            self.layerTreeIndexByTreeItemId[layer.id()] = int(layerDefinition['xmlitem'].attrib['__ginx___'])
             for inx, a in enumerate(layerDefinition['ancestors']):
                 layerTreeItemAncestor = layerTreeItemAncestors[inx]
-                self.layerTreeIndexByTreeItemId[id(layerTreeItemAncestor)] = a.attrib['__ginx___']
-                a.attrib['__qgzgroup___'] = layerTreeItemAncestor
+                self.layerTreeIndexByTreeItemId[id(layerTreeItemAncestor)] = int(a.attrib['__ginx___'])
+                # lxml attributes must stay strings, so the group object is
+                # kept in a sidecar dict keyed by the xml element itself.
+                self._xml_group_by_element[a] = layerTreeItemAncestor
 
             modelIndex = self.getTreeViewModelIndex(layerName)
             
@@ -967,13 +991,14 @@ class QNarcis:
             return m.group(1).strip()
 
         # 2) Query-like source string: ...&url=https://...&...
+        values = []
         try:
             parsed = parse_qs(source, keep_blank_values=True)
             values = parsed.get('url', [])
-            if values:
-                return str(values[0]).strip()
         except Exception:
-            pass
+            values = []
+        if values:
+            return str(values[0]).strip()
 
         # 3) Fallback for unquoted url=... tokens
         m = re.search(r"(?:^|[&\s])url=([^&\s]+)", source, flags=re.IGNORECASE)
@@ -1030,7 +1055,7 @@ class QNarcis:
             QgsMessageLog.logMessage(
                 f"Startup probe failed ({provider_key}): {probe_url} -> {exc}",
                 "QNarcIS",
-                Qgis.Warning
+                _QGIS_WARNING
             )
             return False
 
@@ -1078,7 +1103,7 @@ class QNarcis:
                     QgsMessageLog.logMessage(
                         f"Skipping startup layer (service unavailable): {layerName}",
                         "QNarcIS",
-                        Qgis.Warning
+                        _QGIS_WARNING
                     )
                     continue
 
@@ -1097,7 +1122,7 @@ class QNarcis:
                         "QNarcIS",
                         self.tr("Privzeta podlaga ni dosegljiva. Naložena je nadomestna podlaga")
                         + f": {layerName}",
-                        level=Qgis.Warning,
+                        level=_QGIS_WARNING,
                         duration=8
                     )
                 if not self.country_code == 'SI':
@@ -1227,7 +1252,7 @@ class QNarcis:
                 uname = cmap['username']
                 pwd = cmap['password']
             else:
-                self.iface.messageBar().pushMessage("Napaka", "Napaka pri nalaganju avtentikacijske konfiguracije qnarcis_oauth.", level=Qgis.Critical)
+                self.iface.messageBar().pushMessage("Napaka", "Napaka pri nalaganju avtentikacijske konfiguracije qnarcis_oauth.", level=_QGIS_CRITICAL)
                 return
         elif skip_if_not_logged:
             return
@@ -1239,7 +1264,7 @@ class QNarcis:
                 uname = uname.strip()
                 pwd = pwd.strip()
             else:
-                self.iface.messageBar().pushMessage("Prekinjeno", "Prijava je bila preklicana.", level=Qgis.Info)
+                self.iface.messageBar().pushMessage("Prekinjeno", "Prijava je bila preklicana.", level=_QGIS_INFO)
                 return
 
         auth_id, config_name, user_name = findGeoserverAuthConfig()
@@ -1274,7 +1299,7 @@ class QNarcis:
                         self.addGeoserverConfig(self.geoserver_credentials.get('user'), self.geoserver_credentials.get('key'))
                         
                         self.updateLoginStatusUI()
-                        self.iface.messageBar().pushMessage("QNarcIS", "Prijava uspešna za: {}".format(uname), level=Qgis.Success)
+                        self.iface.messageBar().pushMessage("QNarcIS", "Prijava uspešna za: {}".format(uname), level=_QGIS_SUCCESS)
                         return
             
              # Login failed: delete config if it existed
@@ -1284,13 +1309,13 @@ class QNarcis:
             self.iface.messageBar().pushMessage(
                 "Napaka pri prijavi",
                 "Nepravilni podatki ali ni dostopa.",
-                level=Qgis.Critical
+                level=_QGIS_CRITICAL
             )
         except Exception as e:
             self.iface.messageBar().pushMessage(
                 "Napaka pri povezavi",
                 "Ne morem se povezati s strežnikom: {}".format(str(e)),
-                level=Qgis.Critical
+                level=_QGIS_CRITICAL
             )
 
         self.geoserver_credentials = None
@@ -1400,12 +1425,12 @@ class QNarcis:
             if 'qnarcis_oauth' in am.availableAuthMethodConfigs().keys():
                 am.removeAuthenticationConfig('qnarcis_oauth')
                 QgsApplication.authManager().clearCachedConfig('qnarcis_oauth')
-                QgsMessageLog.logMessage("Odjava iz zaščitenih funkcij je bila uspešna.", "QNarcIS", Qgis.Success)
-                self.iface.messageBar().pushMessage("QNarcIS", "Odjava iz zaščitenih funkcij je bila uspešna.", level=Qgis.Success)
+                QgsMessageLog.logMessage("Odjava iz zaščitenih funkcij je bila uspešna.", "QNarcIS", _QGIS_SUCCESS)
+                self.iface.messageBar().pushMessage("QNarcIS", "Odjava iz zaščitenih funkcij je bila uspešna.", level=_QGIS_SUCCESS)
             else:
-                self.iface.messageBar().pushMessage("QNarcIS", "Iz zaščitenih funkcij ste že odjavljeni.", level=Qgis.Info)
+                self.iface.messageBar().pushMessage("QNarcIS", "Iz zaščitenih funkcij ste že odjavljeni.", level=_QGIS_INFO)
         except Exception as e:
-            self.iface.messageBar().pushMessage("QNarcIS", "Napaka pri odjavi qnarcis_oauth.", level=Qgis.Warning)
+            self.iface.messageBar().pushMessage("QNarcIS", "Napaka pri odjavi qnarcis_oauth.", level=_QGIS_WARNING)
         # Remove all Geoserver configs
         self.deleteAllGeoserverConfigs()
         # Clear login variables
@@ -1521,7 +1546,7 @@ class QNarcis:
                 self.iface.messageBar().pushMessage(
                     "QNarcIS",
                     self.tr("Prijava ni bila uspešna ali je bila preklicana. Za ogled zaščitenega sloja je potrebna prijava."),
-                    level=Qgis.Warning
+                    level=_QGIS_WARNING
                 )
                 return None # Login canceled or failed
             
@@ -1530,7 +1555,7 @@ class QNarcis:
                 self.iface.messageBar().pushMessage(
                     "QNarcIS",
                     self.tr("Ne morem ustvariti avtentikacijske konfiguracije za Geoserver – sloj ne bo naložen."),
-                    level=Qgis.Critical
+                    level=_QGIS_CRITICAL
                 )
                 return None
         
@@ -1607,7 +1632,7 @@ class QNarcis:
                             "QNarcIS",
                             self.tr("Napaka pri nalaganju zaščitenega sloja") + f": {layerName}. "
                             + self.tr("Za dostop do tega sloja nimate ustreznih pravic."),
-                            level=Qgis.Critical
+                            level=_QGIS_CRITICAL
                         )
                     if callback:
                         callback(None)
@@ -1636,7 +1661,7 @@ class QNarcis:
                 reload_required = True
 
             if reload_required:
-                QgsMessageLog.logMessage('Loading ' + providerKey + ' layer: ' + layerName + ' ...\n' + 'Layer source: ' + layerData['source'], "QNarcIS", Qgis.Info)
+                QgsMessageLog.logMessage('Loading ' + providerKey + ' layer: ' + layerName + ' ...\n' + 'Layer source: ' + layerData['source'], "QNarcIS", _QGIS_INFO)
                 
                 if layerData.get('locked'):
                     layerData['source'] = source = self.add_cb_inside_url_values(layerData['source'])
@@ -1657,13 +1682,13 @@ class QNarcis:
                 root = group = QgsProject.instance().layerTreeRoot()
                 for xmlItem in reversed(layerData['ancestors']):
                     groupName = xmlItem.get('name')
-                    if not '__qgzgroup___' in xmlItem.attrib:
-                        group = xmlItem.attrib['__qgzgroup___'] = self.insertGroup(group, groupName, xmlItem.attrib['__ginx___'])
+                    if xmlItem not in self._xml_group_by_element:
+                        group = self._xml_group_by_element[xmlItem] = self.insertGroup(group, groupName, int(xmlItem.attrib['__ginx___']))
                     else:
-                        if not sip.isdeleted(xmlItem.attrib['__qgzgroup___']):
-                            group = xmlItem.attrib['__qgzgroup___']
+                        if not sip.isdeleted(self._xml_group_by_element[xmlItem]):
+                            group = self._xml_group_by_element[xmlItem]
                         else:
-                            group = xmlItem.attrib['__qgzgroup___'] = self.insertGroup(group, groupName, xmlItem.attrib['__ginx___'])
+                            group = self._xml_group_by_element[xmlItem] = self.insertGroup(group, groupName, int(xmlItem.attrib['__ginx___']))
 
                 if root.findLayer(layer.id()) is None:
                     mapLayer = QgsProject.instance().addMapLayer(layer, False)
@@ -1673,7 +1698,7 @@ class QNarcis:
                         mapLayer.setMaximumScale(float(additionalData['maxScale']))
                         mapLayer.setScaleBasedVisibility(True)
 
-                    layerIndex = layerData['xmlitem'].attrib['__ginx___']
+                    layerIndex = int(layerData['xmlitem'].attrib['__ginx___'])
                     pos = self.getLayerTreeItemPosition(group, layerIndex)
                     lid = layerData['xmlitem'].get('id')
                     qmlPath = os.path.join(self.plugin_dir,'qml',lid+'.qml')
@@ -1696,13 +1721,13 @@ class QNarcis:
                             "QNarcIS",
                             self.tr("Napaka pri nalaganju sloja") + f": {layerName}. "
                             + self.tr("Morda nimate dovolj pravic za dostop do tega sloja."),
-                            level=Qgis.Critical
+                            level=_QGIS_CRITICAL
                         )
                     else:
                         self.iface.messageBar().pushMessage(
                             "Error",
                             self.tr("Napaka pri nalaganju sloja") + ": " + layerName,
-                            level=Qgis.Critical
+                            level=_QGIS_CRITICAL
                         )
                 
                 treeItemColor = QColor(255,0,0)
@@ -1743,11 +1768,11 @@ class QNarcis:
             self.iface.messageBar().pushMessage(
                 "QNarcIS",
                 self.tr("Napaka pri shranjevanju Geoserver avtentikacije – avtentikacijska konfiguracija ni bila ustvarjena."),
-                level=Qgis.Critical
+                level=_QGIS_CRITICAL
             )
             return None
         QgsApplication.authManager().clearCachedConfig(auth_id)
-        QgsMessageLog.logMessage(f"Stored Geoserver config as {config_name} (id={auth_id})", "QNarcIS", Qgis.Info)
+        QgsMessageLog.logMessage(f"Stored Geoserver config as {config_name} (id={auth_id})", "QNarcIS", _QGIS_INFO)
         return auth_id
 
     def update_layer_source_authcfg(self, source, new_authcfg_id):
@@ -1775,11 +1800,14 @@ class QNarcis:
     def addTreeItems(self, parentTreeItem, xml, sub_folder=''):
 
         def getAncestors(item, layerItemData):
-            name = item.get('name')
-            if name is not None:
-                layerItemData['ancestors'].append(item)
-            if '__qgzparent___' in item.attrib:
-                getAncestors(item.attrib['__qgzparent___'], layerItemData)
+            # lxml exposes the parent chain natively via getparent(), so no
+            # synthetic parent attribute is needed (lxml requires string values).
+            node = item
+            while node is not None:
+                name = node.get('name')
+                if name is not None:
+                    layerItemData['ancestors'].append(node)
+                node = node.getparent()
                 
 
         for idx, child in enumerate(xml):
@@ -1793,8 +1821,8 @@ class QNarcis:
                 urlItemLink = ''
                 urlItemDescription = ''
                 stanjeItemText = ''
-                child.attrib['__qgzparent___'] = xml
-                child.attrib['__ginx___'] = idx
+                # lxml attributes must be strings; the index is decoded with int().
+                child.attrib['__ginx___'] = str(idx)
                 nodeNameItem = QStandardItem(nodeName)
 
                 append_row = True
@@ -1880,6 +1908,10 @@ class QNarcis:
         """
         xml = _safe_xml_parse(os.path.join(self.plugin_dir, sub_folder, 'vsi_sloji.xml'))
         root = xml.getroot()
+        # The main tree is rebuilt from fresh elements; drop stale sidecar entries.
+        # The temporary settings catalog must not disturb live main mappings.
+        if not sub_folder:
+            self._xml_group_by_element.clear()
         self.addTreeItems(tree.data_model.invisibleRootItem(), root, sub_folder)
 
     def importData(self, data, root=None):
@@ -1925,12 +1957,12 @@ class QNarcis:
             
             if not task.taskFunResult['sub_folder']:
                 self.qgz_version = task.taskFunResult['id']
-                self.iface.messageBar().pushMessage(self.tr("Nameščanje novega kataloga slojev"), self.tr("Nov katalog slojev je bil uspešno nameščen"), level=Qgis.Success)
+                self.iface.messageBar().pushMessage(self.tr("Nameščanje novega kataloga slojev"), self.tr("Nov katalog slojev je bil uspešno nameščen"), level=_QGIS_SUCCESS)
             
             if task.taskFunResult['callback']:
                 task.taskFunResult['callback']()
         else:
-            self.iface.messageBar().pushMessage(self.tr("Nameščanje kataloga slojev"), self.tr("Napaka pri nameščanju kataloga slojev"), level=Qgis.Critical)
+            self.iface.messageBar().pushMessage(self.tr("Nameščanje kataloga slojev"), self.tr("Napaka pri nameščanju kataloga slojev"), level=_QGIS_CRITICAL)
 
         self.enableActions()
 
@@ -1975,16 +2007,16 @@ class QNarcis:
             QgsMessageLog.logMessage(
                 f"Invalid q_narcis/qgz_version in settings, clearing it: {clientVersionIdRaw!r}",
                 "QNarcIS",
-                Qgis.Warning,
+                _QGIS_WARNING,
             )
             s.remove('q_narcis/qgz_version')
 
         if not hasattr(task, 'taskFunResult') or task.taskFunResult == None:
-            self.iface.messageBar().pushMessage(self.tr("Povezovanje na NarcIS strežnik"), self.tr("Napaka pri povezavi na https://narcis.gov.si/ords/narcis/hr/qgz"), level=Qgis.Warning)
+            self.iface.messageBar().pushMessage(self.tr("Povezovanje na NarcIS strežnik"), self.tr("Napaka pri povezavi na https://narcis.gov.si/ords/narcis/hr/qgz"), level=_QGIS_WARNING)
             _finish_check_without_install()
             return
         elif len(task.taskFunResult) == 0:
-            self.iface.messageBar().pushMessage(self.tr("Seznam slojev"), self.tr("Seznam slojev za državo") + " " + self.country_code + " " + self.tr("je prazen") , level=Qgis.Warning)
+            self.iface.messageBar().pushMessage(self.tr("Seznam slojev"), self.tr("Seznam slojev za državo") + " " + self.country_code + " " + self.tr("je prazen") , level=_QGIS_WARNING)
             _finish_check_without_install()
             return
         
@@ -1994,12 +2026,12 @@ class QNarcis:
             QgsMessageLog.logMessage(
                 f"Invalid catalog id from server, aborting install: {id!r}",
                 "QNarcIS",
-                Qgis.Critical,
+                _QGIS_CRITICAL,
             )
             self.iface.messageBar().pushMessage(
                 self.tr("Nameščanje kataloga slojev"),
                 self.tr("Napaka pri nameščanju kataloga slojev"),
-                level=Qgis.Critical
+                level=_QGIS_CRITICAL
             )
             _finish_check_without_install()
             return
@@ -2045,8 +2077,8 @@ class QNarcis:
                         self.geoserver_credentials['qnarcis_user'] = uname
                         self.updateLoginStatusUI()
         except Exception:
-            # Silent fail — nothing to show if config is missing/invalid
-            pass
+            # Nothing to show if the optional authentication config is unavailable.
+            return
 
     def runIskalnik(self):
         if not hasattr(self, 'iskalnik_widget'):
@@ -2081,7 +2113,7 @@ class QNarcis:
         """Run method that loads and starts the plugin"""
 
         if self.task:
-            self.iface.messageBar().pushMessage(self.tr("Nameščanje kataloga slojev"), self.tr("Prosim počakajte, da se nameščanje kataloga slojev konča."), level=Qgis.Info)
+            self.iface.messageBar().pushMessage(self.tr("Nameščanje kataloga slojev"), self.tr("Prosim počakajte, da se nameščanje kataloga slojev konča."), level=_QGIS_INFO)
             return False
 
         #print "** STARTING QNarcis"
@@ -2207,7 +2239,7 @@ class QNarcis:
             self.iface.messageBar().pushMessage(
                 "QNarcIS",
                 f"Prijavljeni ste kot {user}.",
-                level=Qgis.Info,
+                level=_QGIS_INFO,
                 duration=0  # sticky on purpose
             )
 
@@ -2228,7 +2260,7 @@ class QNarcis:
                 if isinstance(parsed, list):
                     return [str(v) for v in parsed]
             except Exception:
-                pass
+                return [raw_text]
             return [raw_text]
 
         return []
@@ -2420,7 +2452,7 @@ class QNarcis:
             self.iface.messageBar().pushMessage(
                 "QNarcIS",
                 self.tr("Katalog slojev še ni nameščen ali je poškodovan. Poskusite ponovno čez nekaj trenutkov."),
-                level=Qgis.Warning
+                level=_QGIS_WARNING
             )
 
             tree.proxy_model = QNarcisSortFilterProxyModel()
@@ -2459,7 +2491,7 @@ class QNarcis:
         cfg.setConfigMap(cMap)
         am.storeAuthenticationConfig(cfg)
         QgsApplication.authManager().clearCachedConfig('qnarcis_oauth')
-        QgsMessageLog.logMessage("Cache for qnarcis_oauth has been cleared.", "QNarcIS", Qgis.Info)
+        QgsMessageLog.logMessage("Cache for qnarcis_oauth has been cleared.", "QNarcIS", _QGIS_INFO)
 
     def saveCredentialsIfValidAsync(self, uname, pwd, cfg):
         """
@@ -2478,7 +2510,7 @@ class QNarcis:
 
                 br = QgsBlockingNetworkRequest()
                 status = br.get(req)
-                if status == QgsBlockingNetworkRequest.NoError:
+                if status == _QGS_NETWORK_NO_ERROR:
                     reply = br.reply()
                     data = reply.content().data()
                     try:
@@ -2487,7 +2519,7 @@ class QNarcis:
                         resp = {}
                     return "kljuc" in resp
             except Exception:
-                pass
+                return False
             return False
 
         def _on_finished(task):
@@ -2497,7 +2529,11 @@ class QNarcis:
                     try:
                         self.addConfig(uname, pwd)
                     except Exception:
-                        pass
+                        QgsMessageLog.logMessage(
+                            "Validated QNarcIS credentials could not be stored.",
+                            "QNarcIS",
+                            _QGIS_WARNING,
+                        )
             finally:
                 try:
                     if getattr(self, "_cred_save_task", None) is task:
@@ -2569,7 +2605,7 @@ class QNarcis:
             self.iface.messageBar().pushMessage(
                 "QNarcIS",
                 "Pošiljanje je že v teku. Počakajte, da se trenutno opravilo zaključi.",
-                level=Qgis.Info
+                level=_QGIS_INFO
             )
             return
 
@@ -2577,23 +2613,23 @@ class QNarcis:
 
         # 1) Preverjanje sloja in tipa
         if layer is None:
-            self.iface.messageBar().pushMessage("Napaka", "Noben sloj ni aktiven.", level=Qgis.Warning)
+            self.iface.messageBar().pushMessage("Napaka", "Noben sloj ni aktiven.", level=_QGIS_WARNING)
             return
-        if layer.type() is not QgsMapLayer.VectorLayer:
-            self.iface.messageBar().pushMessage("Napaka", "Izbrati je treba VEKTORSKI (poligonski) sloj.", level=Qgis.Warning)
+        if layer.type() != _QGIS_VECTOR_LAYER:
+            self.iface.messageBar().pushMessage("Napaka", "Izbrati je treba VEKTORSKI (poligonski) sloj.", level=_QGIS_WARNING)
             return
 
         wkb = QgsWkbTypes.flatType(layer.wkbType())
         allowed = (
-            QgsWkbTypes.Point, QgsWkbTypes.MultiPoint,
-            QgsWkbTypes.LineString, QgsWkbTypes.MultiLineString,
-            QgsWkbTypes.Polygon, QgsWkbTypes.MultiPolygon
+            _QGIS_WKB_POINT, _QGIS_WKB_MULTIPOINT,
+            _QGIS_WKB_LINESTRING, _QGIS_WKB_MULTILINESTRING,
+            _QGIS_WKB_POLYGON, _QGIS_WKB_MULTIPOLYGON
         )
         if wkb not in allowed:
             self.iface.messageBar().pushMessage(
                 "Napaka",
                 "Izbrani sloj mora biti točkovni, linijski ali poligonski (vključno z Multi*).",
-                level=Qgis.Warning
+                level=_QGIS_WARNING
             )
             return
 
@@ -2650,10 +2686,10 @@ class QNarcis:
                 self.iface.mainWindow(),
                 "QNarcIS",
                 f"Sloj, ki ga pošiljate ima neveljavno ime atributa ({bad_name}). Ali želite poslati sloj brez tega atributa?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
+                _QMESSAGEBOX_YES | _QMESSAGEBOX_NO,
+                _QMESSAGEBOX_NO
             )
-            if reply != QMessageBox.Yes:
+            if reply != _QMESSAGEBOX_YES:
                 return
             excluded_field_names = invalid_field_names
 
@@ -2680,12 +2716,10 @@ class QNarcis:
             self._upload_running = True
 
             # Robustno: počisti zaklep, ko status doseže "Complete" ali več (velja tudi za "Canceled"/"Terminated")
-            COMPLETE = getattr(QgsTask, "Complete", 3)
-
             def _maybe_clear(flag_status):
                 try:
                     # flag_status je int (QgsTask.Status)
-                    if int(flag_status) >= int(COMPLETE):
+                    if int(flag_status) >= int(_QGSTASK_COMPLETE):
                         self._upload_running = False
                 except Exception:
                     # če karkoli zataji, raje sprosti zaklep
@@ -2694,24 +2728,32 @@ class QNarcis:
             try:
                 t.statusChanged.connect(_maybe_clear)
                 t.destroyed.connect(lambda *args, **kwargs: setattr(self, "_upload_running", False))
-            except Exception:
-                pass
+            except Exception as exc:
+                QgsMessageLog.logMessage(
+                    f"Could not connect upload task status handlers: {exc}",
+                    "QNarcIS",
+                    _QGIS_WARNING,
+                )
 
             QgsApplication.taskManager().addTask(t)
             self._sending_task = t
 
         except Exception as e:
             self._upload_running = False
-            QgsMessageLog.logMessage("Napaka pri zagonu naloge: {}".format(e), "QNarcIS", Qgis.Critical)
-            self.iface.messageBar().pushMessage("QNarcIS", "Napaka pri zagonu naloge za pošiljanje sloja.", level=Qgis.Critical)
+            QgsMessageLog.logMessage("Napaka pri zagonu naloge: {}".format(e), "QNarcIS", _QGIS_CRITICAL)
+            self.iface.messageBar().pushMessage("QNarcIS", "Napaka pri zagonu naloge za pošiljanje sloja.", level=_QGIS_CRITICAL)
 
     def refreshTableData(self, id2=None):
 
         if hasattr(self, 'table'):
             try:
                 self.layout.removeWidget(self.table)
-            except:
-                pass
+            except Exception as exc:
+                QgsMessageLog.logMessage(
+                    f"Could not remove the previous query table widget: {exc}",
+                    "QNarcIS",
+                    _QGIS_WARNING,
+                )
 
         self.table = QTableView()
           #data.append([feature.id(), feature['id2'], feature['ime_sloja'], feature['opomba'], feature['created'],feature['user_id']])

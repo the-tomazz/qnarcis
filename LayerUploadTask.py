@@ -10,6 +10,52 @@ from qgis.PyQt.QtCore import (
     QObject, QUrl, QByteArray, pyqtSignal, pyqtSlot, Qt, QThread
 )
 from qgis.PyQt.QtNetwork import QNetworkRequest, QNetworkReply
+from qgis.PyQt.QtWidgets import QMessageBox
+
+
+def _enum_value(*candidates):
+    for owner, *path in candidates:
+        value = owner
+        try:
+            for name in path:
+                value = getattr(value, name)
+            return value
+        except AttributeError:
+            continue
+    raise AttributeError("No compatible enum value found")
+
+
+_QGIS_INFO = _enum_value((Qgis, 'Info'), (Qgis, 'MessageLevel', 'Info'))
+_QGIS_WARNING = _enum_value((Qgis, 'Warning'), (Qgis, 'MessageLevel', 'Warning'))
+_QGIS_CRITICAL = _enum_value((Qgis, 'Critical'), (Qgis, 'MessageLevel', 'Critical'))
+_QGIS_SUCCESS = _enum_value((Qgis, 'Success'), (Qgis, 'MessageLevel', 'Success'))
+_QGSTASK_CAN_CANCEL = _enum_value((QgsTask, 'CanCancel'), (QgsTask, 'Flag', 'CanCancel'))
+_GEOMETRY_POINT = _enum_value(
+    (QgsWkbTypes, 'PointGeometry'),
+    (Qgis, 'GeometryType', 'Point'),
+    (Qgis, 'GeometryType', 'PointGeometry'),
+    (QgsWkbTypes, 'GeometryType', 'PointGeometry'),
+)
+_GEOMETRY_LINE = _enum_value(
+    (QgsWkbTypes, 'LineGeometry'),
+    (Qgis, 'GeometryType', 'Line'),
+    (Qgis, 'GeometryType', 'LineGeometry'),
+    (QgsWkbTypes, 'GeometryType', 'LineGeometry'),
+)
+_GEOMETRY_POLYGON = _enum_value(
+    (QgsWkbTypes, 'PolygonGeometry'),
+    (Qgis, 'GeometryType', 'Polygon'),
+    (Qgis, 'GeometryType', 'PolygonGeometry'),
+    (QgsWkbTypes, 'GeometryType', 'PolygonGeometry'),
+)
+_VALIDATOR_GEOS = _enum_value(
+    (QgsGeometry, 'ValidatorGeos'),
+    (QgsGeometry, 'ValidationMethod', 'ValidatorGeos'),
+)
+_QMESSAGEBOX_OK = _enum_value(
+    (QMessageBox, 'Ok'),
+    (QMessageBox, 'StandardButton', 'Ok'),
+)
 
 _QT_ISO_DATE = getattr(Qt, 'ISODate', None)
 if _QT_ISO_DATE is None:
@@ -34,21 +80,21 @@ def _log(level, msg):
     try:
         QgsMessageLog.logMessage(msg, 'QNarcIS', level)
     except Exception:
-        pass
+        return None
 
 def _parts_in(g, geom_type):
     if g is None or g.isEmpty():
         return 0
     try:
         if QgsWkbTypes.isMultiType(g.wkbType()):
-            if geom_type == QgsWkbTypes.PointGeometry:
+            if geom_type == _GEOMETRY_POINT:
                 return len(g.asMultiPoint())
-            elif geom_type == QgsWkbTypes.LineGeometry:
+            elif geom_type == _GEOMETRY_LINE:
                 try:
                     return len(g.asMultiPolyline())
                 except Exception:
                     return len(g.asMultiLineString())
-            elif geom_type == QgsWkbTypes.PolygonGeometry:
+            elif geom_type == _GEOMETRY_POLYGON:
                 return len(g.asMultiPolygon())
         return 1
     except Exception:
@@ -60,17 +106,18 @@ def _bbox_array(layer, xform):
         if xform is not None:
             rect = xform.transformBoundingBox(rect)
     except Exception:
-        pass
+        _log(_QGIS_WARNING, "Pretvorba obsega sloja ni uspela; uporabljen bo izvorni obseg.")
     return [rect.xMinimum(), rect.yMinimum(), rect.xMaximum(), rect.yMaximum()]
 
 def _to_jsonable(v):
     from qgis.PyQt.QtCore import QDateTime, QDate, QTime, QByteArray as QtBA, QVariant
     from qgis.PyQt.QtGui import QColor
+    original_v = v
     try:
         if isinstance(v, QVariant):
             v = v.value()
     except Exception:
-        pass
+        v = original_v
     if v is None or isinstance(v, (bool, int, float, str)): return v
     if isinstance(v, (QDateTime, QDate, QTime)): return v.toString(_QT_ISO_DATE)
     if isinstance(v, QtBA):
@@ -83,7 +130,7 @@ def _to_jsonable(v):
         from datetime import datetime, date, time as pytime
         if isinstance(v, (datetime, date, pytime)): return v.isoformat()
     except Exception:
-        pass
+        return str(v)
     return str(v)
 
 
@@ -131,7 +178,7 @@ class _Poster(QObject):
                             break
                     dock = mw.findChild(QDockWidget, 'MessageLog')
                 except Exception:
-                    pass
+                    _log(_QGIS_WARNING, "Podokna dnevnika ni bilo mogoče odpreti.")
             if dock:
                 dock.show()
                 dock.raise_()
@@ -142,7 +189,7 @@ class _Poster(QObject):
                             tabs.setCurrentIndex(i)
                             break
         except Exception:
-            pass
+            _log(_QGIS_WARNING, "Podokna dnevnika QNarcIS ni bilo mogoče prikazati.")
 
     def cancel_all(self):
         """Prevent any new requests and abort all in-flight ones."""
@@ -157,7 +204,7 @@ class _Poster(QObject):
             try:
                 reply.abort()
             except Exception:
-                pass
+                _log(_QGIS_WARNING, "Aktivne omrežne zahteve ni bilo mogoče prekiniti.")
 
     def _detect_server_units_limit(self, resp):
         try:
@@ -181,7 +228,7 @@ class _Poster(QObject):
             if "ora-20000" in text and "geometrij" in text:
                 return msg_text or "Strežnik je zavrnil pošiljanje zaradi omejitve geometrijskih enot."
         except Exception:
-            pass
+            return None
         return None
 
     @pyqtSlot(int, int, QByteArray)
@@ -230,7 +277,7 @@ class _Poster(QObject):
                 resp["_qnarcis_server_limit"] = True
                 resp["_qnarcis_server_limit_message"] = self._server_limit_message
                 ok = False
-                _log(Qgis.Warning, f"Pošiljanje je bilo prekinjeno zaradi omejitve na strežniku: {self._server_limit_message}")
+                _log(_QGIS_WARNING, f"Pošiljanje je bilo prekinjeno zaradi omejitve na strežniku: {self._server_limit_message}")
                 self.cancel_all()
 
         reply.deleteLater()
@@ -241,7 +288,7 @@ class _Poster(QObject):
             return
 
         if not ok:
-            _log(Qgis.Critical, f"Pošiljanje paketa {batch_idx} je spodletelo: {resp}")
+            _log(_QGIS_CRITICAL, f"Pošiljanje paketa {batch_idx} je spodletelo: {resp}")
             if not self._popup_shown:
                 try:
                     msgw = iface.messageBar().createMessage(
@@ -251,9 +298,9 @@ class _Poster(QObject):
                     btn = QPushButton("Odpri dnevnik")
                     btn.clicked.connect(self._open_qnarcis_log)
                     msgw.layout().addWidget(btn)
-                    iface.messageBar().pushWidget(msgw, Qgis.Critical)
+                    iface.messageBar().pushWidget(msgw, _QGIS_CRITICAL)
                 except Exception:
-                    pass
+                    _log(_QGIS_WARNING, "Obvestila o napaki pri pošiljanju ni bilo mogoče prikazati.")
                 self._popup_shown = True
 
         self.batchFinished.emit(batch_idx, n_feats, ok, resp)
@@ -289,7 +336,7 @@ class LayerUploadTask(QgsTask):
         selected_only=False,
         max_units_limit=None   # None = unlimited. Unit = singlepart(1) or multipart(#parts)
     ):
-        super().__init__(description, QgsTask.CanCancel)
+        super().__init__(description, _QGSTASK_CAN_CANCEL)
         if not username or not password:
             raise ValueError("username and password are required")
 
@@ -352,7 +399,7 @@ class LayerUploadTask(QgsTask):
             self._start_msg_item = iface.messageBar().createMessage(
                 "QNarcIS", "Preverjam veljavnost geometrije objektov."
             )
-            iface.messageBar().pushWidget(self._start_msg_item, Qgis.Info)
+            iface.messageBar().pushWidget(self._start_msg_item, _QGIS_INFO)
         except Exception:
             self._start_msg_item = None
 
@@ -364,11 +411,11 @@ class LayerUploadTask(QgsTask):
             try:
                 QgsTask.cancel(self)
             except Exception:
-                pass
+                _log(_QGIS_WARNING, "Opravila za pošiljanje ni bilo mogoče označiti kot preklicanega.")
         try:
             self._poster.cancel_all()
         except Exception:
-            pass
+            _log(_QGIS_WARNING, "Omrežnih zahtev ob preklicu ni bilo mogoče ustaviti.")
 
         self._poster.restore_timeout()
 
@@ -405,7 +452,7 @@ class LayerUploadTask(QgsTask):
                     try:
                         self._poster.cancel_all()
                     except Exception:
-                        pass
+                        _log(_QGIS_WARNING, "Omrežnih zahtev ob preklicu ni bilo mogoče ustaviti.")
                     return False
                 try:
                     feat = next(precheck_it)
@@ -414,7 +461,7 @@ class LayerUploadTask(QgsTask):
 
                 g = feat.geometry()
                 try:
-                    problems = g.validateGeometry(QgsGeometry.ValidatorGeos)
+                    problems = g.validateGeometry(_VALIDATOR_GEOS)
                 except Exception:
                     problems = []
                 if problems:
@@ -433,7 +480,7 @@ class LayerUploadTask(QgsTask):
                     try:
                         self._poster.cancel_all()
                     except Exception:
-                        pass
+                        _log(_QGIS_WARNING, "Omrežnih zahtev ob preklicu ni bilo mogoče ustaviti.")
                     return False
 
                 try:
@@ -497,25 +544,25 @@ class LayerUploadTask(QgsTask):
                     try:
                         self._poster.cancel_all()
                     except Exception:
-                        pass
+                        _log(_QGIS_WARNING, "Omrežnih zahtev ob preklicu ni bilo mogoče ustaviti.")
                     return False
                 QThread.msleep(20)
 
             return True
 
         except Exception as e:
-            _log(Qgis.Critical, f"Napaka opravila: {e}")
+            _log(_QGIS_CRITICAL, f"Napaka opravila: {e}")
             try:
                 self._poster.cancel_all()
             except Exception:
-                pass
+                _log(_QGIS_WARNING, "Omrežnih zahtev po napaki opravila ni bilo mogoče ustaviti.")
             return False
         
         finally:
             try:
                 self._poster.restore_timeout()
             except Exception:
-                pass
+                _log(_QGIS_WARNING, "Časovne omejitve omrežja ni bilo mogoče obnoviti.")
 
     def finished(self, result):
         from qgis.utils import iface
@@ -525,21 +572,20 @@ class LayerUploadTask(QgsTask):
             if getattr(self, '_start_msg_item', None) is not None:
                 iface.messageBar().popWidget(self._start_msg_item)
         except Exception:
-            pass
+            _log(_QGIS_WARNING, "Začetnega obvestila o pošiljanju ni bilo mogoče odstraniti.")
 
         if self._invalid_geometry_precheck_failed:
             msg = "Geometrije nekaterih objektov za pošiljanje niso veljavne. Vsi objekti za pošiljanje morajo imeti veljavno geometrijo."
             try:
-                from qgis.PyQt.QtWidgets import QMessageBox
                 QMessageBox.warning(
                     iface.mainWindow(),
                     "QNarcIS",
                     msg,
-                    QMessageBox.Ok
+                    _QMESSAGEBOX_OK
                 )
             except Exception:
-                pass
-            _log(Qgis.Warning, msg)
+                _log(_QGIS_WARNING, "Opozorila o neveljavnih geometrijah ni bilo mogoče prikazati.")
+            _log(_QGIS_WARNING, msg)
             self._poster.restore_timeout()
             return
 
@@ -557,7 +603,7 @@ class LayerUploadTask(QgsTask):
 
         if total_feats <= 0:
             text = "Nič za poslati."
-            level = Qgis.Warning
+            level = _QGIS_WARNING
         else:
             text = f"{ok} od {total_feats} objektov je bilo uspešno prenesenih."
             if err:
@@ -570,9 +616,9 @@ class LayerUploadTask(QgsTask):
                 text += " Pošiljanje je bilo prekinjeno."
             if self._hit_units_limit and self._max_units_limit is not None:
                 text += f" Dosežen je bil trenutno dovoljen limit {int(self._max_units_limit)} objektov; pošiljanje je bilo ustavljeno."
-            level = Qgis.Success if err == 0 and result and not self._hit_units_limit else Qgis.Warning
+            level = _QGIS_SUCCESS if err == 0 and result and not self._hit_units_limit else _QGIS_WARNING
             if not result:
-                level = Qgis.Warning
+                level = _QGIS_WARNING
 
         # Log final summary to QNarcIS tab as well
         _log(level, text)
@@ -600,7 +646,7 @@ class LayerUploadTask(QgsTask):
                 try:
                     iface.messageBar().pushMessage(title, text, level=level, duration=0)
                 except Exception:
-                    pass
+                    _log(_QGIS_WARNING, "Končnega obvestila o pošiljanju ni bilo mogoče prikazati.")
         else:
             try:
                 if need_log_button:
@@ -613,10 +659,10 @@ class LayerUploadTask(QgsTask):
                 else:
                     iface.messageBar().pushMessage(title, text, level=level, duration=0)
             except Exception:
-                pass
+                _log(_QGIS_WARNING, "Končnega obvestila o pošiljanju ni bilo mogoče prikazati.")
 
         if not result:
-            _log(Qgis.Warning, "Naloga pošiljanja je bila preklicana ali neuspešna.")
+            _log(_QGIS_WARNING, "Naloga pošiljanja je bila preklicana ali neuspešna.")
 
         self._poster.restore_timeout()
 
@@ -679,7 +725,7 @@ class LayerUploadTask(QgsTask):
                 if lid is not None and self._layer_id is None:
                     self._layer_id = int(lid)
             except Exception:
-                pass
+                _log(_QGIS_WARNING, "Identifikatorja naloženega sloja ni bilo mogoče obdelati.")
         else:
             self._err_features += n_feats
 

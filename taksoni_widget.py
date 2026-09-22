@@ -20,55 +20,68 @@ _QT_USER_ROLE = getattr(Qt, "UserRole", None)
 if _QT_USER_ROLE is None:
     _QT_USER_ROLE = Qt.ItemDataRole.UserRole
 
+_QGIS_INFO = getattr(Qgis, "Info", None)
+if _QGIS_INFO is None:
+    _QGIS_INFO = Qgis.MessageLevel.Info
+
+_QGIS_SUCCESS = getattr(Qgis, "Success", None)
+if _QGIS_SUCCESS is None:
+    _QGIS_SUCCESS = Qgis.MessageLevel.Success
+
+_QGIS_WARNING = getattr(Qgis, "Warning", None)
+if _QGIS_WARNING is None:
+    _QGIS_WARNING = Qgis.MessageLevel.Warning
+
+_QGIS_CRITICAL = getattr(Qgis, "Critical", None)
+if _QGIS_CRITICAL is None:
+    _QGIS_CRITICAL = Qgis.MessageLevel.Critical
+
+_QGSTASK_CAN_CANCEL = getattr(QgsTask, "CanCancel", None)
+if _QGSTASK_CAN_CANCEL is None:
+    _QGSTASK_CAN_CANCEL = QgsTask.Flag.CanCancel
+
+_QGSTASK_SILENT = getattr(QgsTask, "Silent", None)
+if _QGSTASK_SILENT is None:
+    _QGSTASK_SILENT = QgsTask.Flag.Silent
+
+_QGSTASK_HIDDEN = getattr(QgsTask, "Hidden", None)
+if _QGSTASK_HIDDEN is None:
+    _QGSTASK_HIDDEN = QgsTask.Flag.Hidden
+
 def _to_message_level(level):
     if not isinstance(level, int):
         return level
 
-    success = getattr(Qgis, "Success", getattr(Qgis, "Info", 0))
-    warning = getattr(Qgis, "Warning", getattr(Qgis, "Info", 0))
-    critical = getattr(Qgis, "Critical", warning)
-
     return {
-        0: success,
-        1: warning,
-        2: critical,
-    }.get(level, getattr(Qgis, "Info", 0))
+        0: _QGIS_SUCCESS,
+        1: _QGIS_WARNING,
+        2: _QGIS_CRITICAL,
+    }.get(level, _QGIS_INFO)
 
 def _push_message(title, text, level=0, duration=3):
     msgbar = iface.messageBar()
     level_value = _to_message_level(level)
     full_text = f"{title}: {text}" if title else str(text)
 
-    try:
-        msgbar.pushMessage(title, text, level=level_value, duration=duration)
-        return
-    except TypeError:
-        pass
-
-    try:
-        msgbar.pushMessage(title, text, level_value, duration)
-        return
-    except TypeError:
-        pass
-
-    try:
-        msgbar.pushMessage(full_text, level=level_value, duration=duration)
-        return
-    except TypeError:
-        pass
-
-    try:
-        msgbar.pushMessage(full_text, level_value, duration)
-        return
-    except TypeError:
-        pass
+    attempts = (
+        ((title, text), {"level": level_value, "duration": duration}),
+        ((title, text, level_value, duration), {}),
+        ((full_text,), {"level": level_value, "duration": duration}),
+        ((full_text, level_value, duration), {}),
+    )
+    for args, kwargs in attempts:
+        try:
+            msgbar.pushMessage(*args, **kwargs)
+            return
+        except TypeError:
+            continue
 
     msgbar.pushMessage(full_text)
 
 class DownloadTask(QgsTask):
     """QgsTask for downloading JSON data in the background"""
     def __init__(self, json_file):
-        super().__init__("", QgsTask.CanCancel | QgsTask.Silent | QgsTask.Hidden)
+        super().__init__("", _QGSTASK_CAN_CANCEL | _QGSTASK_SILENT | _QGSTASK_HIDDEN)
         self.json_file = json_file
         self.url = "https://narcis.gov.si/ords/narcis/hr/katalog-vrst-v4"
         self.exception = None
