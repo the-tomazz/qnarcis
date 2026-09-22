@@ -47,6 +47,7 @@ jobs:
           rsync -a \
             --exclude '.git' \
             --exclude '.github' \
+            --exclude '/dist/' \
             ./ dist/qnarcis/
           (
             cd dist
