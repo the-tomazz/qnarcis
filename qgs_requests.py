@@ -106,7 +106,7 @@ def _apply_timeout(req, timeout):
         return
 
 
-def get(url, headers=None, timeout=None, allow_redirects=True):
+def get(url, headers=None, timeout=None, allow_redirects=True, feedback=None):
     """
     Drop-in-ish replacement for requests.get(url, headers=..., timeout=..., allow_redirects=...)
     Note: allow_redirects is effectively handled by QGIS/Qt; kept for API compatibility.
@@ -120,7 +120,7 @@ def get(url, headers=None, timeout=None, allow_redirects=True):
     _apply_headers(req, headers)
 
     b = QgsBlockingNetworkRequest()
-    err = b.get(req)
+    err = b.get(req, False, feedback)
     reply = b.reply()
 
     err_msg = ""
@@ -134,8 +134,14 @@ def get(url, headers=None, timeout=None, allow_redirects=True):
 
 class _RequestsCompat:
     @staticmethod
-    def get(url, headers=None, timeout=None, allow_redirects=True):
-        return get(url, headers=headers, timeout=timeout, allow_redirects=allow_redirects)
+    def get(url, headers=None, timeout=None, allow_redirects=True, feedback=None):
+        return get(
+            url,
+            headers=headers,
+            timeout=timeout,
+            allow_redirects=allow_redirects,
+            feedback=feedback,
+        )
 
 
 # Import this as: from .qgs_requests import requests

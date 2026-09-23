@@ -30,11 +30,12 @@ except ImportError:
 from qgis.PyQt.QtWidgets import QMenu, QToolButton
 from qgis.PyQt.QtWidgets import QTabWidget, QMessageBox, QDialog, QComboBox, QCheckBox, QWidget, QTreeView, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTableView, QPushButton, QInputDialog, QProgressBar, QSizePolicy, QListWidget
 from qgis.core import QgsApplication, QgsAuthMethodConfig
-from qgis.core import QgsSettings, QgsBlockingNetworkRequest, QgsRectangle, QgsReferencedRectangle, QgsCoordinateReferenceSystem
+from qgis.core import QgsSettings, QgsBlockingNetworkRequest, QgsRectangle, QgsReferencedRectangle, QgsCoordinateReferenceSystem, QgsCoordinateTransform
 from qgis.PyQt.QtNetwork import QNetworkRequest
 
 from qgis.gui import (
     QgsMessageBar,
+    QgsRubberBand,
 )
 # Initialize Qt resources from file resources.py
 from .resources import *
@@ -54,6 +55,7 @@ from .qgs_requests import requests
 
 from .credentials_dialog import CustomCredentialsDialog
 from .taksoni_widget import Taksoni
+from .parcele_widget import Parcele
 
 from .gsrv_utils import get_wms_layers_difference, findGeoserverAuthConfig
 
@@ -68,7 +70,7 @@ from collections import deque
 
 from urllib.parse import parse_qs, urlsplit, urlunsplit, parse_qsl, urlencode
 
-from qgis.core import QgsMessageLog, QgsVectorLayer, QgsProject, QgsRasterLayer, QgsFeature, QgsWkbTypes, QgsGeometry, QgsLayerTreeGroup, QgsLayerTreeLayer, QgsMapLayer
+from qgis.core import QgsMessageLog, QgsVectorLayer, QgsProject, QgsRasterLayer, QgsFeature, QgsWkbTypes, QgsGeometry, QgsLayerTreeGroup, QgsLayerTreeLayer, QgsMapLayer, QgsPointXY
 
 from qgis.core import Qgis, QgsTask
 
@@ -331,6 +333,9 @@ _QGIS_WKB_LINESTRING = _legacy_or_scoped_enum(QgsWkbTypes, 'LineString', Qgis, '
 _QGIS_WKB_MULTILINESTRING = _legacy_or_scoped_enum(QgsWkbTypes, 'MultiLineString', Qgis, 'WkbType', 'MultiLineString')
 _QGIS_WKB_POLYGON = _legacy_or_scoped_enum(QgsWkbTypes, 'Polygon', Qgis, 'WkbType', 'Polygon')
 _QGIS_WKB_MULTIPOLYGON = _legacy_or_scoped_enum(QgsWkbTypes, 'MultiPolygon', Qgis, 'WkbType', 'MultiPolygon')
+_QGIS_GEOMETRY_POLYGON = _legacy_or_scoped_enum(
+    QgsWkbTypes, 'PolygonGeometry', Qgis, 'GeometryType', 'Polygon', 'PolygonGeometry'
+)
 _QGSTASK_COMPLETE = _legacy_or_scoped_enum(QgsTask, 'Complete', QgsTask, 'TaskStatus', 'Complete')
 
 _QMESSAGEBOX_OK = getattr(QMessageBox, 'Ok', None)
@@ -703,6 +708,8 @@ class QNarcis:
         self.translations = {}
 
         self.task = None
+        self._unloaded = False
+        self._parcel_highlight = None
 
         self.queue = None
         
@@ -1477,7 +1484,17 @@ class QNarcis:
 
         #print "** UNLOAD QNarcis"
 
+        self._unloaded = True
+        self._pending_parcel = None
+        self._parcel_retry_scheduled = False
+        try:
+            self._clear_parcel_highlight()
+        except Exception:
+            pass
         self.deleteAllGeoserverConfigs()
+
+        if hasattr(self, 'parcele_widget'):
+            self.parcele_widget.shutdown()
 
         for action in self.actions:
             self.iface.removePluginMenu(
@@ -2092,6 +2109,12 @@ class QNarcis:
             taksoni_widget.loginRequested.connect(self.apiLogin)
             tab_widget.addTab(taksoni_widget, self.tr("Vrste"))
 
+            self.parcele_widget = Parcele()
+            self.parcele_widget.parcelSelected.connect(self.openParcelOwnershipLayer)
+            self.parcele_widget.searchChanged.connect(self._clearPendingParcel)
+            self.parcele_widget.highlightClearRequested.connect(self._onParcelHighlightClearRequested)
+            tab_widget.addTab(self.parcele_widget, self.tr("Parcele"))
+
             # NEW: container with a right-aligned login label above the tabs
             container = QWidget()
             v = QVBoxLayout()
@@ -2108,6 +2131,277 @@ class QNarcis:
         self.iskalnik_widget.show()
 
         self._initLoginStatusFromAuthConfig()
+
+    def openParcelOwnershipLayer(self, parcel):
+        """Open the catalog ownership layer and zoom to a GURS parcel extent."""
+        if self._unloaded:
+            return
+        if self.task:
+            self.parcele_widget.set_result_message(
+                self.tr("Prosim počakajte, da se nameščanje kataloga slojev konča.")
+            )
+            self._pending_parcel = parcel
+            if not getattr(self, '_parcel_retry_scheduled', False):
+                self._parcel_retry_scheduled = True
+                QTimer.singleShot(500, self._retryPendingParcel)
+            return
+
+        if not self.hasDataModel() and not self.run(True):
+            self.parcele_widget.set_result_message(
+                self.tr("Kataloga slojev ni mogoče odpreti.")
+            )
+            return
+
+        preferred_names = (
+            "Lastništvo parcel (INFORMATIVNO)",
+            "Lastništvo parcel",
+        )
+        layer_name = self._find_layer_name_in_model(self.tree.data_model, preferred_names)
+        if not layer_name:
+            self._clear_parcel_highlight()
+            self.parcele_widget.set_result_message(
+                self.tr("Sloj Lastništvo parcel ni na voljo v katalogu slojev.")
+            )
+            return
+
+        model_index = self.getTreeViewModelIndex(layer_name)
+        if model_index is None or not model_index.isValid():
+            self.parcele_widget.set_result_message(
+                self.tr("Sloja Lastništvo parcel ni mogoče najti v katalogu.")
+            )
+            return
+
+        qgz_layer_id = self.tree.data_model.data(model_index, _QT_USER_ROLE + 1)
+
+        def on_layer_ready(layer):
+            if layer is None or not layer.isValid():
+                self._clear_parcel_highlight()
+                self.parcele_widget.set_result_message(
+                    self.tr("Sloja Lastništvo parcel ni bilo mogoče odpreti.")
+                )
+                return
+            try:
+                self._show_layer_and_zoom_to_parcel(layer, parcel)
+                try:
+                    self._show_parcel_highlight(parcel)
+                except Exception:
+                    QgsMessageLog.logMessage(
+                        "Parcel highlight failed:\n{}".format(traceback.format_exc()),
+                        "QNarcIS",
+                        _QGIS_WARNING,
+                    )
+                self.parcele_widget.set_result_message(
+                    self.tr("Prikazana je parcela")
+                    + " {}/{}.".format(parcel.get('sifko', ''), parcel.get('number', ''))
+                )
+            except Exception:
+                QgsMessageLog.logMessage(
+                    "Parcel zoom failed:\n{}".format(traceback.format_exc()),
+                    "QNarcIS",
+                    _QGIS_WARNING,
+                )
+                self.parcele_widget.set_result_message(
+                    self.tr("Sloj je odprt, vendar približevanje na parcelo ni uspelo.")
+                )
+
+        for layer_data in self.locked_layers.get(layer_name, []):
+            loaded_layer = layer_data.get('layer')
+            if loaded_layer is not None and not sip.isdeleted(loaded_layer) and loaded_layer.isValid():
+                on_layer_ready(loaded_layer)
+                return
+
+        try:
+            self.handleTreeItemClick(
+                layer_name,
+                qgz_layer_id,
+                model_index,
+                self.tree.data_model,
+                callback=on_layer_ready,
+            )
+        except Exception:
+            QgsMessageLog.logMessage(
+                "Parcel ownership layer loading failed:\n{}".format(traceback.format_exc()),
+                "QNarcIS",
+                _QGIS_WARNING,
+            )
+            self._clear_parcel_highlight()
+            self.parcele_widget.set_result_message(
+                self.tr("Sloja Lastništvo parcel ni bilo mogoče odpreti.")
+            )
+
+    def _retryPendingParcel(self):
+        self._parcel_retry_scheduled = False
+        if self._unloaded:
+            return
+        parcel = getattr(self, '_pending_parcel', None)
+        if parcel is None:
+            return
+        if self.task:
+            self._parcel_retry_scheduled = True
+            QTimer.singleShot(500, self._retryPendingParcel)
+            return
+        self._pending_parcel = None
+        self.openParcelOwnershipLayer(parcel)
+
+    def _clearPendingParcel(self):
+        self._pending_parcel = None
+        self._clear_parcel_highlight()
+
+    def _onParcelHighlightClearRequested(self):
+        if getattr(self, '_unloaded', False):
+            return
+        self._clear_parcel_highlight()
+        if hasattr(self, 'parcele_widget'):
+            self.parcele_widget.set_result_message(
+                self.tr("Oznaka parcele je počiščena.")
+            )
+
+    def _show_parcel_highlight(self, parcel):
+        """Draw a persistent outline of the selected parcel on the canvas.
+
+        Never raises for missing/invalid geometry: the caller already zoomed
+        to the parcel bbox, so a missing outline is a non-fatal degradation.
+        The geometry is transformed to the canvas CRS explicitly (the same
+        proven path as the parcel zoom) instead of relying on the rubber
+        band's automatic reprojection.
+        """
+        geometry_dict = parcel.get('geometry')
+        if not isinstance(geometry_dict, dict) or not geometry_dict.get('coordinates'):
+            QgsMessageLog.logMessage(
+                "Parcel highlight skipped: WFS response has no parcel geometry.",
+                "QNarcIS",
+                _QGIS_WARNING,
+            )
+            return False
+
+        # NOTE: QgsGeometry.fromGeoJson() exists in QGIS 3 but was removed in
+        # QGIS 4, so the geometry is built directly from coordinates with
+        # fromPolygonXY()/fromMultiPolygonXY(), which exist in both.
+        geometry = self._geometry_from_geojson_dict(geometry_dict)
+        if geometry is None or geometry.isEmpty():
+            QgsMessageLog.logMessage(
+                "Parcel highlight skipped: cannot parse parcel geometry.",
+                "QNarcIS",
+                _QGIS_WARNING,
+            )
+            return False
+
+        canvas = self.iface.mapCanvas()
+        source_crs = QgsCoordinateReferenceSystem(parcel.get('crs') or 'EPSG:3794')
+        destination_crs = canvas.mapSettings().destinationCrs()
+        if source_crs != destination_crs:
+            transform = QgsCoordinateTransform(source_crs, destination_crs, QgsProject.instance())
+            geometry.transform(transform)
+            if geometry.isEmpty():
+                QgsMessageLog.logMessage(
+                    "Parcel highlight skipped: geometry transform failed.",
+                    "QNarcIS",
+                    _QGIS_WARNING,
+                )
+                return False
+
+        band = getattr(self, '_parcel_highlight', None)
+        if band is None or sip.isdeleted(band):
+            band = self._parcel_highlight = QgsRubberBand(canvas, _QGIS_GEOMETRY_POLYGON)
+            band.setColor(QColor(255, 0, 0))
+            band.setFillColor(QColor(255, 0, 0, 40))
+            band.setWidth(2)
+        else:
+            band.reset(_QGIS_GEOMETRY_POLYGON)
+
+        band.setToGeometry(geometry, None)
+        band.show()
+        QgsMessageLog.logMessage(
+            "Parcel highlight drawn: {} vertices, extent {}.".format(
+                len(list(geometry.vertices())),
+                geometry.boundingBox().toString(),
+            ),
+            "QNarcIS",
+            _QGIS_INFO,
+        )
+        return True
+
+    @staticmethod
+    def _geometry_from_geojson_dict(geometry_dict):
+        """Build a polygon QgsGeometry from a GeoJSON geometry dict.
+
+        Supports Polygon and MultiPolygon with 2D positions. Returns None
+        for anything else. Uses only API available in QGIS 3 and QGIS 4.
+        """
+        try:
+            geom_type = str(geometry_dict.get('type') or '')
+            coordinates = geometry_dict.get('coordinates') or []
+        except Exception:
+            return None
+
+        def to_ring(positions):
+            ring = []
+            for position in positions or []:
+                try:
+                    ring.append(QgsPointXY(float(position[0]), float(position[1])))
+                except (IndexError, TypeError, ValueError):
+                    continue
+            return ring
+
+        try:
+            if geom_type == 'Polygon':
+                rings = [to_ring(ring) for ring in coordinates]
+                rings = [ring for ring in rings if len(ring) >= 4]
+                if not rings:
+                    return None
+                return QgsGeometry.fromPolygonXY(rings)
+            if geom_type == 'MultiPolygon':
+                parts = []
+                for polygon in coordinates:
+                    rings = [to_ring(ring) for ring in (polygon or [])]
+                    rings = [ring for ring in rings if len(ring) >= 4]
+                    if rings:
+                        parts.append(rings)
+                if not parts:
+                    return None
+                return QgsGeometry.fromMultiPolygonXY(parts)
+        except Exception:
+            return None
+        return None
+
+    def _clear_parcel_highlight(self):
+        band = getattr(self, '_parcel_highlight', None)
+        if band is None:
+            return
+        try:
+            if not sip.isdeleted(band):
+                band.reset(_QGIS_GEOMETRY_POLYGON)
+                band.hide()
+        except Exception:
+            pass
+
+    def _show_layer_and_zoom_to_parcel(self, layer, parcel):
+        root = QgsProject.instance().layerTreeRoot()
+        layer_node = root.findLayer(layer.id())
+        node = layer_node
+        while node is not None:
+            node.setItemVisibilityChecked(True)
+            node = node.parent()
+
+        bbox = parcel.get('bbox') or []
+        if len(bbox) < 4:
+            raise ValueError("Parcel extent is missing")
+
+        rect = QgsRectangle(float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+        source_crs = QgsCoordinateReferenceSystem(parcel.get('crs') or 'EPSG:3794')
+        canvas = self.iface.mapCanvas()
+        destination_crs = canvas.mapSettings().destinationCrs()
+        if source_crs != destination_crs:
+            transform = QgsCoordinateTransform(source_crs, destination_crs, QgsProject.instance())
+            rect = transform.transformBoundingBox(rect)
+
+        margin = max(rect.width(), rect.height()) * 0.12
+        rect.grow(margin if margin > 0 else 10.0)
+        self.iface.setActiveLayer(layer)
+        canvas.setExtent(rect)
+        if layer.hasScaleBasedVisibility() and layer.minimumScale() > 0:
+            canvas.zoomScale(min(canvas.scale(), layer.minimumScale() * 0.95))
+        canvas.refresh()
     
     def run(self, hide = False):
         """Run method that loads and starts the plugin"""

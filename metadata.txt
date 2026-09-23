@@ -7,8 +7,8 @@ name=QNarcIS
 qgisMinimumVersion=3.28.4
 qgisMaximumVersion=4.99
 description=SL: QGIS-vticnik za informacijski sistem za naravo - NarcIS | EN: QGIS plugin for the Slovenian Nature Information System - NarcIS
-version=3.3.3
-changelog=3.3.3 (2026-09-22): fixed loading of password-protected (locked) layers that have no public variant (double-click now works); resolved QGIS Plugin Repository validation findings, including secure XML parsing, explicit exception handling, and QGIS 4 compatibility.
+version=3.4.1-RC1
+changelog=3.4.1-RC1 (2026-09-23): release candidate for user testing - new parcel ownership searcher (Parcele tab in Iskalnik): KO autocomplete with ranked suggestions, parcel number search, opens the existing Lastništvo parcel layer, zooms to and highlights the selected parcel; works in QGIS 3 and QGIS 4.
 author=Spatial mind (info@spatialmind.org) for Slovenian Environment Agency - ARSO (narcis.arso@gov.si)
 email=narcis.arso@gov.si
 
