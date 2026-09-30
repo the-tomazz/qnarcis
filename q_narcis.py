@@ -1427,13 +1427,51 @@ class QNarcis:
         all Geoserver configs, and resets related login variables.
         """
         am = QgsApplication.authManager()
+        # Detach project layers from Geoserver configs BEFORE deleting them:
+        # layers referencing a deleted authcfg keep hammering the auth manager
+        # on every repaint (reload loop with "Load config: FAILED" messages).
+        try:
+            gsrv_ids = []
+            for auth_id, config in am.availableAuthMethodConfigs().items():
+                if hasattr(config, 'name'):
+                    config_name = config.name()
+                else:
+                    config_name = config
+                if isinstance(config_name, str) and config_name.startswith('narcis_gsrv_'):
+                    gsrv_ids.append(auth_id)
+            for layer in QgsProject.instance().mapLayers().values():
+                try:
+                    source = layer.source()
+                except Exception:
+                    continue
+                if source and any(gsrv_id in source for gsrv_id in gsrv_ids):
+                    new_source = re.sub(r"authcfg=[^\s'\"]+", "", source).strip()
+                    if new_source and new_source != source:
+                        try:
+                            layer.setDataSource(new_source, layer.name(), layer.providerType())
+                        except Exception:
+                            QgsMessageLog.logMessage(
+                                "Could not detach auth config from layer '{}'.".format(layer.name()),
+                                "QNarcIS",
+                                _QGIS_WARNING,
+                            )
+            try:
+                self.iface.mapCanvas().refresh()
+            except Exception:
+                pass
+        except Exception:
+            QgsMessageLog.logMessage(
+                "Logout layer cleanup failed:\n{}".format(traceback.format_exc()),
+                "QNarcIS",
+                _QGIS_WARNING,
+            )
         # Remove general OAuth config
         try:
             if 'qnarcis_oauth' in am.availableAuthMethodConfigs().keys():
                 am.removeAuthenticationConfig('qnarcis_oauth')
                 QgsApplication.authManager().clearCachedConfig('qnarcis_oauth')
                 QgsMessageLog.logMessage("Odjava iz zaščitenih funkcij je bila uspešna.", "QNarcIS", _QGIS_SUCCESS)
-                self.iface.messageBar().pushMessage("QNarcIS", "Odjava iz zaščitenih funkcij je bila uspešna.", level=_QGIS_SUCCESS)
+                self.iface.messageBar().pushMessage("QNarcIS", "Odjava iz zaščitenih funkcij je bila uspešna. Zaščiteni sloji za ponovni ogled potrebujejo ponovno prijavo.", level=_QGIS_SUCCESS)
             else:
                 self.iface.messageBar().pushMessage("QNarcIS", "Iz zaščitenih funkcij ste že odjavljeni.", level=_QGIS_INFO)
         except Exception as e:
@@ -1493,8 +1531,13 @@ class QNarcis:
             pass
         self.deleteAllGeoserverConfigs()
 
-        if hasattr(self, 'parcele_widget'):
-            self.parcele_widget.shutdown()
+        for widget_attr in ('parcele_widget', 'parcele_lastnistvo_widget'):
+            widget = getattr(self, widget_attr, None)
+            if widget is not None and not sip.isdeleted(widget):
+                try:
+                    widget.shutdown()
+                except (AttributeError, RuntimeError):
+                    pass
 
         for action in self.actions:
             self.iface.removePluginMenu(
@@ -2104,16 +2147,24 @@ class QNarcis:
             self.iskalnik_widget.setWindowTitle(self.tr("Iskalnik"))
 
             tab_widget = QTabWidget()
+            self.iskalnik_tabs = tab_widget
+
+            self.parcele_widget = Parcele(searcher_id="parcele")
+            self.parcele_widget.parcelSelected.connect(self.openParcelLayer)
+            self.parcele_widget.searchChanged.connect(self._clearPendingParcel)
+            tab_widget.addTab(self.parcele_widget, self.tr("Parcele"))
+
+            self.parcele_lastnistvo_widget = Parcele(searcher_id="lastnistvo")
+            self.parcele_lastnistvo_widget.parcelSelected.connect(self.openParcelLayer)
+            self.parcele_lastnistvo_widget.searchChanged.connect(self._clearPendingParcel)
+            self._lastnistvo_tab_index = tab_widget.addTab(
+                self.parcele_lastnistvo_widget, self.tr("Lastništvo parcel"))
 
             taksoni_widget = Taksoni()
             taksoni_widget.loginRequested.connect(self.apiLogin)
             tab_widget.addTab(taksoni_widget, self.tr("Vrste"))
 
-            self.parcele_widget = Parcele()
-            self.parcele_widget.parcelSelected.connect(self.openParcelOwnershipLayer)
-            self.parcele_widget.searchChanged.connect(self._clearPendingParcel)
-            self.parcele_widget.highlightClearRequested.connect(self._onParcelHighlightClearRequested)
-            tab_widget.addTab(self.parcele_widget, self.tr("Parcele"))
+            tab_widget.currentChanged.connect(self._onIskalnikTabChanged)
 
             # NEW: container with a right-aligned login label above the tabs
             container = QWidget()
@@ -2130,14 +2181,51 @@ class QNarcis:
         self.iface.addTabifiedDockWidget(_qt_right_dock_widget_area(), self.iskalnik_widget, ['seznam', 'poizvedba', 'news', 'help'], raiseTab=True)
         self.iskalnik_widget.show()
 
+        self._ownership_login_prompted = False
         self._initLoginStatusFromAuthConfig()
 
-    def openParcelOwnershipLayer(self, parcel):
-        """Open the catalog ownership layer and zoom to a GURS parcel extent."""
+    def _parcel_widget_for(self, parcel):
+        if isinstance(parcel, dict) and parcel.get('searcher') == 'lastnistvo':
+            return getattr(self, 'parcele_lastnistvo_widget', None) or self.parcele_widget
+        return self.parcele_widget
+
+    def _onIskalnikTabChanged(self, index):
+        if getattr(self, '_unloaded', False):
+            return
+        if index != getattr(self, '_lastnistvo_tab_index', -1):
+            return
+        if getattr(self, '_ownership_login_prompted', False):
+            return
+        self._ownership_login_prompted = True
+        auth_id, _, _ = findGeoserverAuthConfig()
+        if not auth_id:
+            # Offer login as soon as the ownership searcher is picked, so the
+            # user is not asked for rights only after choosing a parcel.
+            self.apiLogin()
+
+    def openParcelLayer(self, parcel):
+        """Open the catalog parcel layer for the used searcher and zoom to it."""
         if self._unloaded:
             return
+        result_widget = self._parcel_widget_for(parcel)
+        if isinstance(parcel, dict) and parcel.get('searcher') == 'lastnistvo':
+            preferred_names = (
+                "Lastništvo parcel (INFORMATIVNO)",
+                "Lastništvo parcel",
+            )
+            display_name = "Lastništvo parcel"
+        else:
+            # WMS display: the WFS variant fails to render because the GURS
+            # service rejects overly broad feature requests.
+            preferred_names = (
+                "Parcele (Zemljiški kataster - ZKN) (WMS)",
+                "Parcele (Zemljiški kataster - ZKN)",
+                "Parcele",
+            )
+            display_name = "Parcele"
+
         if self.task:
-            self.parcele_widget.set_result_message(
+            result_widget.set_result_message(
                 self.tr("Prosim počakajte, da se nameščanje kataloga slojev konča.")
             )
             self._pending_parcel = parcel
@@ -2147,27 +2235,23 @@ class QNarcis:
             return
 
         if not self.hasDataModel() and not self.run(True):
-            self.parcele_widget.set_result_message(
+            result_widget.set_result_message(
                 self.tr("Kataloga slojev ni mogoče odpreti.")
             )
             return
 
-        preferred_names = (
-            "Lastništvo parcel (INFORMATIVNO)",
-            "Lastništvo parcel",
-        )
         layer_name = self._find_layer_name_in_model(self.tree.data_model, preferred_names)
         if not layer_name:
             self._clear_parcel_highlight()
-            self.parcele_widget.set_result_message(
-                self.tr("Sloj Lastništvo parcel ni na voljo v katalogu slojev.")
+            result_widget.set_result_message(
+                self.tr("Sloj {} ni na voljo v katalogu slojev.").format(display_name)
             )
             return
 
         model_index = self.getTreeViewModelIndex(layer_name)
         if model_index is None or not model_index.isValid():
-            self.parcele_widget.set_result_message(
-                self.tr("Sloja Lastništvo parcel ni mogoče najti v katalogu.")
+            result_widget.set_result_message(
+                self.tr("Sloja {} ni mogoče najti v katalogu.").format(display_name)
             )
             return
 
@@ -2176,11 +2260,13 @@ class QNarcis:
         def on_layer_ready(layer):
             if layer is None or not layer.isValid():
                 self._clear_parcel_highlight()
-                self.parcele_widget.set_result_message(
-                    self.tr("Sloja Lastništvo parcel ni bilo mogoče odpreti.")
+                result_widget.set_result_message(
+                    self.tr("Sloja {} ni bilo mogoče odpreti.").format(display_name)
                 )
                 return
             try:
+                # KO layer first so the parcel layer stays the active layer.
+                self._open_ko_layer_quietly()
                 self._show_layer_and_zoom_to_parcel(layer, parcel)
                 try:
                     self._show_parcel_highlight(parcel)
@@ -2190,9 +2276,9 @@ class QNarcis:
                         "QNarcIS",
                         _QGIS_WARNING,
                     )
-                self.parcele_widget.set_result_message(
+                result_widget.set_result_message(
                     self.tr("Prikazana je parcela")
-                    + " {}/{}.".format(parcel.get('sifko', ''), parcel.get('number', ''))
+                    + " {} {}.".format(parcel.get('sifko', ''), parcel.get('number', ''))
                 )
             except Exception:
                 QgsMessageLog.logMessage(
@@ -2200,7 +2286,7 @@ class QNarcis:
                     "QNarcIS",
                     _QGIS_WARNING,
                 )
-                self.parcele_widget.set_result_message(
+                result_widget.set_result_message(
                     self.tr("Sloj je odprt, vendar približevanje na parcelo ni uspelo.")
                 )
 
@@ -2220,13 +2306,13 @@ class QNarcis:
             )
         except Exception:
             QgsMessageLog.logMessage(
-                "Parcel ownership layer loading failed:\n{}".format(traceback.format_exc()),
+                "Parcel layer loading failed:\n{}".format(traceback.format_exc()),
                 "QNarcIS",
                 _QGIS_WARNING,
             )
             self._clear_parcel_highlight()
-            self.parcele_widget.set_result_message(
-                self.tr("Sloja Lastništvo parcel ni bilo mogoče odpreti.")
+            result_widget.set_result_message(
+                self.tr("Sloja {} ni bilo mogoče odpreti.").format(display_name)
             )
 
     def _retryPendingParcel(self):
@@ -2241,20 +2327,11 @@ class QNarcis:
             QTimer.singleShot(500, self._retryPendingParcel)
             return
         self._pending_parcel = None
-        self.openParcelOwnershipLayer(parcel)
+        self.openParcelLayer(parcel)
 
     def _clearPendingParcel(self):
         self._pending_parcel = None
         self._clear_parcel_highlight()
-
-    def _onParcelHighlightClearRequested(self):
-        if getattr(self, '_unloaded', False):
-            return
-        self._clear_parcel_highlight()
-        if hasattr(self, 'parcele_widget'):
-            self.parcele_widget.set_result_message(
-                self.tr("Oznaka parcele je počiščena.")
-            )
 
     def _show_parcel_highlight(self, parcel):
         """Draw a persistent outline of the selected parcel on the canvas.
@@ -2375,13 +2452,50 @@ class QNarcis:
         except Exception:
             pass
 
-    def _show_layer_and_zoom_to_parcel(self, layer, parcel):
+    def _ensure_layer_tree_visible(self, layer):
+        if layer is None or sip.isdeleted(layer):
+            return
         root = QgsProject.instance().layerTreeRoot()
-        layer_node = root.findLayer(layer.id())
-        node = layer_node
+        node = root.findLayer(layer.id())
         while node is not None:
             node.setItemVisibilityChecked(True)
             node = node.parent()
+
+    def _open_ko_layer_quietly(self):
+        """Turn on the complementary Katastrske občine layer, if available.
+
+        Best effort only: failures are logged and never affect the already
+        opened parcel layer.
+        """
+        try:
+            if not self.hasDataModel():
+                return
+            layer_name = self._find_layer_name_in_model(
+                self.tree.data_model, ("Katastrske občine",))
+            if not layer_name:
+                return
+            model_index = self.getTreeViewModelIndex(layer_name)
+            if model_index is None or not model_index.isValid():
+                return
+            qgz_layer_id = self.tree.data_model.data(model_index, _QT_USER_ROLE + 1)
+
+            def on_ko_ready(layer):
+                if layer is not None and not sip.isdeleted(layer) and layer.isValid():
+                    self._ensure_layer_tree_visible(layer)
+
+            self.handleTreeItemClick(
+                layer_name, qgz_layer_id, model_index, self.tree.data_model,
+                callback=on_ko_ready, show_errors=False,
+            )
+        except Exception:
+            QgsMessageLog.logMessage(
+                "KO layer activation failed:\n{}".format(traceback.format_exc()),
+                "QNarcIS",
+                _QGIS_WARNING,
+            )
+
+    def _show_layer_and_zoom_to_parcel(self, layer, parcel):
+        self._ensure_layer_tree_visible(layer)
 
         bbox = parcel.get('bbox') or []
         if len(bbox) < 4:

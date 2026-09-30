@@ -5,7 +5,7 @@ from urllib.parse import urlencode
 
 from qgis.PyQt.QtCore import QModelIndex, Qt, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QStandardItem, QStandardItemModel
-from qgis.PyQt.QtWidgets import QCompleter, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
+from qgis.PyQt.QtWidgets import QCompleter, QLabel, QLineEdit, QVBoxLayout, QWidget
 from qgis.core import QgsApplication, QgsFeedback, QgsTask
 
 from .qgs_requests import requests
@@ -167,24 +167,37 @@ class AutocompleteEdit(QLineEdit):
 class Parcele(QWidget):
     parcelSelected = pyqtSignal(dict)
     searchChanged = pyqtSignal()
-    highlightClearRequested = pyqtSignal()
 
     WFS_URL = "https://ipi.eprostor.gov.si/wfs-si-gurs-kn/wfs"
     KO_TYPENAME = "SI.GURS.KN:KATASTRSKE_OBCINE"
     PARCEL_TYPENAME = "SI.GURS.KN:PARCELE"
     RESULT_LIMIT = 50
-    _ko_cache = None
+    KO_RESULT_LIMIT = 50
+    KO_QUERY_CACHE_LIMIT = 100
+    # Shared by both searcher instances (Parcele, Lastništvo parcel): KO data
+    # comes from the same public GURS WFS, so a query run in one tab benefits
+    # the other. Maps normalized query -> (records, complete), where complete
+    # means the server returned fewer than KO_RESULT_LIMIT rows, i.e. nothing
+    # was truncated and longer queries may be derived locally.
+    _ko_query_cache = {}
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, searcher_id="parcele"):
         super().__init__(parent)
+        self._searcher_id = searcher_id
         self._ko_task = None
         self._parcel_task = None
         self._geometry_task = None
+        self._ko_request_id = 0
         self._parcel_request_id = 0
         self._geometry_request_id = 0
         self._selected_ko = None
-        self._ko_records = []
+        self._selected_ko_label = None
         self._disposed = False
+
+        self._ko_search_timer = QTimer(self)
+        self._ko_search_timer.setSingleShot(True)
+        self._ko_search_timer.setInterval(400)
+        self._ko_search_timer.timeout.connect(self._search_kos)
 
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
@@ -192,52 +205,27 @@ class Parcele(QWidget):
         self._search_timer.timeout.connect(self._search_parcels)
 
         self._setup_ui()
-        self._load_kos()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
 
         layout.addWidget(QLabel("Katastrska občina"))
         self.ko_edit = AutocompleteEdit("Vnesi šifro ali ime KO ...")
-        self.ko_edit.setEnabled(False)
+        self.ko_edit.setEnabled(True)
         self.ko_edit.textEdited.connect(self._on_ko_text_edited)
+        self.ko_edit.textChanged.connect(self._on_ko_text_changed)
         self.ko_edit.suggestionActivated.connect(self._on_ko_selected)
         layout.addWidget(self.ko_edit)
 
-        ko_selected_row = QHBoxLayout()
-        self.ko_selected_label = QLabel("")
-        self.ko_selected_label.setWordWrap(True)
-        self.ko_selected_label.hide()
-        ko_selected_row.addWidget(self.ko_selected_label, 1)
-        self.ko_clear_button = QPushButton("Počisti")
-        self.ko_clear_button.hide()
-        self.ko_clear_button.clicked.connect(self._on_ko_cleared)
-        ko_selected_row.addWidget(self.ko_clear_button)
-        layout.addLayout(ko_selected_row)
-
         layout.addWidget(QLabel("Parcelna številka"))
-        parcel_row = QHBoxLayout()
         self.parcel_edit = AutocompleteEdit("Najprej izberi KO ...")
         self.parcel_edit.setEnabled(False)
         self.parcel_edit.textEdited.connect(self._on_parcel_text_edited)
+        self.parcel_edit.textChanged.connect(self._on_parcel_text_changed)
         self.parcel_edit.suggestionActivated.connect(self._on_parcel_selected)
-        self.parcel_edit.returnPressed.connect(self._on_parcel_search_requested)
-        parcel_row.addWidget(self.parcel_edit, 1)
-        self.parcel_search_button = QPushButton("Išči")
-        self.parcel_search_button.setEnabled(False)
-        self.parcel_search_button.clicked.connect(self._on_parcel_search_requested)
-        parcel_row.addWidget(self.parcel_search_button)
-        layout.addLayout(parcel_row)
+        layout.addWidget(self.parcel_edit)
 
-        highlight_row = QHBoxLayout()
-        highlight_row.addStretch(1)
-        self.highlight_clear_button = QPushButton("Počisti označbo")
-        self.highlight_clear_button.setToolTip("Odstrani rdeč obris izbrane parcele s karte.")
-        self.highlight_clear_button.clicked.connect(self.highlightClearRequested.emit)
-        highlight_row.addWidget(self.highlight_clear_button)
-        layout.addLayout(highlight_row)
-
-        self.status_label = QLabel("Nalagam katastrske občine ...")
+        self.status_label = QLabel("Vnesi šifro ali ime katastrske občine.")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
         layout.addStretch(1)
@@ -282,20 +270,82 @@ class Parcele(QWidget):
             # QGIS can delete a completed task before Python releases its wrapper.
             return
 
-    def _load_kos(self):
-        if self._ko_cache is not None:
-            self._populate_kos(self._ko_cache)
+    @staticmethod
+    def _escape_cql_like(text):
+        return (text.replace("\\", "\\\\").replace("'", "''")
+                .replace("%", "\\%").replace("_", "\\_"))
+
+    @classmethod
+    def _store_ko_query(cls, query, records):
+        key = query.strip().casefold()
+        cache = cls._ko_query_cache
+        cache.pop(key, None)
+        cache[key] = (list(records), len(records) < cls.KO_RESULT_LIMIT)
+        while len(cache) > cls.KO_QUERY_CACHE_LIMIT:
+            cache.pop(next(iter(cache)))
+
+    def _search_kos(self):
+        if self._disposed:
+            return
+        query = self.ko_edit.text().strip()
+        if not query:
             return
 
+        key = query.casefold()
+        cache = self.__class__._ko_query_cache
+        entry = cache.get(key)
+        if entry is not None:
+            self._show_ko_suggestions(entry[0], query)
+            return
+        # Prefix derivation: the server searches by prefix, so results for a
+        # longer query are a subset of a COMPLETE cached shorter one. Only
+        # within the same branch (code vs. name predicates differ).
+        for length in range(len(key) - 1, 0, -1):
+            prefix = key[:length]
+            prefix_entry = cache.get(prefix)
+            if prefix_entry is None:
+                continue
+            prefix_records, complete = prefix_entry
+            if not complete or prefix.isdigit() != key.isdigit():
+                continue
+            if key.isdigit():
+                filtered = [record for record in prefix_records
+                            if str(record["sifko"]).startswith(key)]
+            else:
+                filtered = [record for record in prefix_records
+                            if record["name"].casefold().startswith(key)]
+            self._show_ko_suggestions(filtered, query)
+            return
+
+        self._ko_request_id += 1
+        request_id = self._ko_request_id
+        self._cancel_task("_ko_task")
+
+        # Server-side prefix search: the WFS rejects bulk downloads, so the
+        # KO list is never fetched in full. Digits search the KO code,
+        # anything else searches the (uppercase) KO name.
+        if query.isdigit():
+            cql_filter = "SIFKO LIKE '{0}%'".format(self._escape_cql_like(query))
+        else:
+            cql_filter = "strToUpperCase(NAZIV) LIKE '{0}%'".format(
+                self._escape_cql_like(query.upper())
+            )
         url = self._build_wfs_url(
             self.KO_TYPENAME,
             ("KO_ID", "NAZIV", "SIFKO"),
-            3000,
+            self.KO_RESULT_LIMIT,
+            cql_filter,
         )
-        self._start_task("_ko_task", url, self._kos_loaded, self._kos_failed)
+        self.status_label.setText("Iščem katastrske občine ...")
+        self._start_task(
+            "_ko_task",
+            url,
+            lambda task: self._kos_loaded(task, request_id, query),
+            lambda task: self._kos_failed(task, request_id),
+        )
 
-    def _kos_loaded(self, task):
-        if self._disposed or task is not self._ko_task:
+    def _kos_loaded(self, task, request_id, query):
+        if self._disposed or request_id != self._ko_request_id or task is not self._ko_task:
             return
         self._ko_task = None
         records = []
@@ -308,65 +358,87 @@ class Parcele(QWidget):
                 continue
             records.append({"ko_id": int(ko_id), "sifko": int(sifko), "name": name})
 
-        records.sort(key=lambda item: (item["sifko"], item["name"].casefold()))
-        self.__class__._ko_cache = records
-        self._populate_kos(records)
-
-    def _kos_failed(self, task):
-        if self._disposed or task is not self._ko_task:
-            return
-        self._ko_task = None
-        if task.cancel_requested:
-            return
-        self.status_label.setText("Katastrskih občin ni bilo mogoče pridobiti. Preveri omrežno povezavo.")
-
-    def _populate_kos(self, records):
-        self._ko_records = records
-        self._selected_ko = None
-        self.ko_edit.clear()
-        self.ko_edit.clear_suggestions()
-        self.ko_edit.setEnabled(bool(records))
-        self.ko_selected_label.hide()
-        self.ko_clear_button.hide()
-        self.status_label.setText("Izberi katastrsko občino.")
-
-    def _on_ko_text_edited(self, text):
-        if self._disposed:
+        if self.ko_edit.text().strip() != query:
             return
 
-        self.searchChanged.emit()
-        self._search_timer.stop()
-        self._parcel_request_id += 1
-        self._geometry_request_id += 1
-        self._cancel_task("_parcel_task")
-        self._cancel_task("_geometry_task")
-        self._selected_ko = None
-        self._clear_parcels()
+        self._store_ko_query(query, records)
+        self._show_ko_suggestions(records, query)
 
-        query = text.strip().casefold()
-        if not query:
-            self.ko_edit.clear_suggestions()
-            self.status_label.setText("Izberi katastrsko občino.")
+    def _show_ko_suggestions(self, records, query):
+        if self._disposed or self.ko_edit.text().strip() != query:
             return
-
-        matches = []
-        for record in self._ko_records:
-            code = str(record["sifko"])
-            name = record["name"].strip()
-            label = f"{code} - {name}"
-            if query in code.casefold() or query in name.casefold() or query in label.casefold():
-                matches.append(record)
-
-        matches.sort(key=lambda record: self._ko_suggestion_key(record, query))
+        query_folded = query.strip().casefold()
+        ordered = sorted(records, key=lambda record: self._ko_suggestion_key(record, query_folded))
         suggestions = [
             (f"{record['sifko']} - {record['name']}", record)
-            for record in matches[:50]
+            for record in ordered[:self.KO_RESULT_LIMIT]
         ]
         self.ko_edit.set_suggestions(suggestions)
         if suggestions:
             self.status_label.setText("Izberi katastrsko občino s seznama predlogov.")
         else:
             self.status_label.setText("Za vneseno iskanje ni katastrskih občin.")
+
+    def _kos_failed(self, task, request_id):
+        if self._disposed or request_id != self._ko_request_id or task is not self._ko_task:
+            return
+        self._ko_task = None
+        if task.cancel_requested:
+            return
+        self.status_label.setText("Katastrskih občin ni bilo mogoče pridobiti. Preveri omrežno povezavo.")
+
+    def _on_ko_text_changed(self, text):
+        # The clear (x) button and programmatic clears emit textChanged, not
+        # textEdited. An emptied KO field is a full reset: drop the selection,
+        # cancel everything and clear the parcel field and the map highlight
+        # (via searchChanged). Idempotent: re-entered by clears issued below.
+        if self._disposed or text.strip():
+            return
+        self._reset_ko_selection()
+
+    def _reset_ko_selection(self):
+        self.searchChanged.emit()
+        self._ko_search_timer.stop()
+        self._search_timer.stop()
+        self._ko_request_id += 1
+        self._parcel_request_id += 1
+        self._geometry_request_id += 1
+        self._cancel_task("_ko_task")
+        self._cancel_task("_parcel_task")
+        self._cancel_task("_geometry_task")
+        self._selected_ko = None
+        self._selected_ko_label = None
+        self.ko_edit.clear_suggestions()
+        self._clear_parcels()
+        self.status_label.setText("Izberi katastrsko občino.")
+
+    def _on_ko_text_edited(self, text):
+        if self._disposed:
+            return
+        # Guard against accidental invalidation: edits that leave the text
+        # identical to the selected label keep the selection.
+        if self._selected_ko is not None and text == self._selected_ko_label:
+            return
+
+        self.searchChanged.emit()
+        self._ko_search_timer.stop()
+        self._search_timer.stop()
+        self._ko_request_id += 1
+        self._parcel_request_id += 1
+        self._geometry_request_id += 1
+        self._cancel_task("_ko_task")
+        self._cancel_task("_parcel_task")
+        self._cancel_task("_geometry_task")
+        self._selected_ko = None
+        self._clear_parcels()
+        self.ko_edit.clear_suggestions()
+
+        if not text.strip():
+            self.status_label.setText("Izberi katastrsko občino.")
+            return
+
+        self.status_label.setText("Vnesi šifro ali ime katastrske občine.")
+        self._ko_search_timer.start()
 
     @staticmethod
     def _ko_suggestion_key(record, query):
@@ -390,35 +462,14 @@ class Parcele(QWidget):
         self.searchChanged.emit()
         self._selected_ko = record
         label = f"{record['sifko']} - {record['name']}"
+        self._selected_ko_label = label
         self.ko_edit.setText(label)
         self.ko_edit.clear_suggestions()
-        # Locked selection: the field is disabled so backspace can no longer
-        # fight the popup; editing resumes explicitly via "Počisti".
-        self.ko_edit.setEnabled(False)
-        self.ko_selected_label.setText(f"Izbrana KO: {label}")
-        self.ko_selected_label.show()
-        self.ko_clear_button.show()
+        # The field stays enabled: any further edit that changes the text
+        # invalidates the selection (see _on_ko_text_edited).
         self._clear_parcels()
+        self.status_label.setText("Vnesi parcelno številko.")
         self.parcel_edit.setFocus()
-
-    def _on_ko_cleared(self):
-        if self._disposed:
-            return
-        self.searchChanged.emit()
-        self._search_timer.stop()
-        self._parcel_request_id += 1
-        self._geometry_request_id += 1
-        self._cancel_task("_parcel_task")
-        self._cancel_task("_geometry_task")
-        self._selected_ko = None
-        self.ko_edit.setEnabled(True)
-        self.ko_edit.clear()
-        self.ko_edit.clear_suggestions()
-        self.ko_selected_label.hide()
-        self.ko_clear_button.hide()
-        self._clear_parcels()
-        self.status_label.setText("Izberi katastrsko občino.")
-        self.ko_edit.setFocus()
 
     def _clear_parcels(self, text=""):
         self._search_timer.stop()
@@ -426,10 +477,25 @@ class Parcele(QWidget):
         self.parcel_edit.setText(text)
         has_ko = self._selected_ko is not None
         self.parcel_edit.setEnabled(has_ko)
-        self.parcel_search_button.setEnabled(has_ko)
         self.parcel_edit.setPlaceholderText(
             "Vnesi parcelno številko ..." if has_ko else "Najprej izberi KO ..."
         )
+
+    def _on_parcel_text_changed(self, text):
+        # The clear (x) button emits textChanged, not textEdited. An emptied
+        # parcel field cancels pending requests and clears the map highlight
+        # (via searchChanged). Idempotent: re-entered by clears issued below.
+        if self._disposed or text.strip():
+            return
+        self.searchChanged.emit()
+        self._search_timer.stop()
+        self._parcel_request_id += 1
+        self._geometry_request_id += 1
+        self._cancel_task("_parcel_task")
+        self._cancel_task("_geometry_task")
+        self.parcel_edit.clear_suggestions()
+        if self._selected_ko is not None:
+            self.status_label.setText("Vnesi parcelno številko.")
 
     def _on_parcel_text_edited(self, text):
         if self._disposed or not self._selected_ko:
@@ -442,27 +508,14 @@ class Parcele(QWidget):
 
         text = text.strip()
         self._search_timer.stop()
-        self.parcel_search_button.setEnabled(bool(self._selected_ko and text))
         if not text:
             self.status_label.setText("Vnesi parcelno številko.")
             return
         if not re.fullmatch(r"[0-9A-Za-z./*-]+", text):
             self.status_label.setText("Parcelna številka vsebuje nedovoljene znake.")
             return
-        self.status_label.setText("Vnesi več znakov ali pritisni Enter / Išči.")
+        self.status_label.setText("Vnesi parcelno številko in izberi predlog s seznama.")
         self._search_timer.start()
-
-    def _on_parcel_search_requested(self):
-        # Explicit search (Enter or the Išči button) bypasses the debounce so
-        # slow typists always search exactly what is in the field. If the user
-        # pressed Enter on an explicitly highlighted popup row, the activation
-        # handler owns the action and we stay out of the way.
-        if self._disposed or not self._selected_ko:
-            return
-        if self.parcel_edit.has_explicit_highlight():
-            return
-        self._search_timer.stop()
-        self._search_parcels()
 
     def _search_parcels(self):
         if self._disposed or not self._selected_ko:
@@ -479,7 +532,7 @@ class Parcele(QWidget):
         request_id = self._parcel_request_id
         self._cancel_task("_parcel_task")
 
-        safe_prefix = prefix.replace("'", "''").replace("%", "\\%").replace("_", "\\_")
+        safe_prefix = self._escape_cql_like(prefix)
         cql_filter = "KO_ID={0} AND ST_PARCELE LIKE '{1}%'".format(
             self._selected_ko["ko_id"], safe_prefix
         )
@@ -567,7 +620,6 @@ class Parcele(QWidget):
         )
         self.status_label.setText("Pripravljam parcelo ...")
         self.parcel_edit.setEnabled(False)
-        self.parcel_search_button.setEnabled(False)
         self._start_task(
             "_geometry_task",
             url,
@@ -580,7 +632,6 @@ class Parcele(QWidget):
             return
         self._geometry_task = None
         self.parcel_edit.setEnabled(True)
-        self.parcel_search_button.setEnabled(bool(self._selected_ko and self.parcel_edit.text().strip()))
         features = (task.data or {}).get("features", [])
         bbox = features[0].get("bbox") if features else None
         if not bbox or len(bbox) < 4:
@@ -591,8 +642,12 @@ class Parcele(QWidget):
         if not isinstance(geometry, dict) or not geometry.get("coordinates"):
             geometry = None
 
-        self.status_label.setText("Odpiram sloj lastništva parcel ...")
+        if self._searcher_id == "lastnistvo":
+            self.status_label.setText("Odpiram sloj lastništva parcel ...")
+        else:
+            self.status_label.setText("Odpiram sloj parcel ...")
         self.parcelSelected.emit({
+            "searcher": self._searcher_id,
             "eid_parcela": parcel["eid_parcela"],
             "number": parcel["number"],
             "sifko": self._selected_ko["sifko"],
@@ -606,7 +661,6 @@ class Parcele(QWidget):
             return
         self._geometry_task = None
         self.parcel_edit.setEnabled(self._selected_ko is not None)
-        self.parcel_search_button.setEnabled(bool(self._selected_ko and self.parcel_edit.text().strip()))
         if task.cancel_requested:
             return
         self.status_label.setText("Lokacije parcele ni bilo mogoče pridobiti.")
@@ -615,7 +669,10 @@ class Parcele(QWidget):
         if self._disposed:
             return
         self._disposed = True
+        self.__class__._ko_query_cache.clear()
+        self._ko_search_timer.stop()
         self._search_timer.stop()
+        self._ko_request_id += 1
         self._parcel_request_id += 1
         self._geometry_request_id += 1
         self._cancel_task("_ko_task")
