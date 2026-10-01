@@ -5,8 +5,9 @@ from urllib.parse import urlencode
 
 from qgis.PyQt.QtCore import QModelIndex, Qt, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QStandardItem, QStandardItemModel
-from qgis.PyQt.QtWidgets import QCompleter, QLabel, QLineEdit, QVBoxLayout, QWidget
+from qgis.PyQt.QtWidgets import QCompleter, QLabel, QLineEdit, QSizePolicy, QVBoxLayout, QWidget
 from qgis.core import QgsApplication, QgsFeedback, QgsTask
+from qgis.gui import QgsMessageBar
 
 from .qgs_requests import requests
 
@@ -31,6 +32,14 @@ if _QCOMPLETER_UNFILTERED_POPUP is None:
 _KEY_DOWN = getattr(Qt, "Key_Down", None)
 if _KEY_DOWN is None:
     _KEY_DOWN = Qt.Key.Key_Down
+
+_QSIZEPOLICY_MINIMUM = getattr(QSizePolicy, "Minimum", None)
+if _QSIZEPOLICY_MINIMUM is None:
+    _QSIZEPOLICY_MINIMUM = QSizePolicy.Policy.Minimum
+
+_QSIZEPOLICY_FIXED = getattr(QSizePolicy, "Fixed", None)
+if _QSIZEPOLICY_FIXED is None:
+    _QSIZEPOLICY_FIXED = QSizePolicy.Policy.Fixed
 
 _QGSTASK_CAN_CANCEL = getattr(QgsTask, "CanCancel", None)
 if _QGSTASK_CAN_CANCEL is None:
@@ -208,6 +217,13 @@ class Parcele(QWidget):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
+
+        # In-tab message bar (e.g. the one-time informative-layer notice).
+        # Hidden until a message is pushed; takes no space while empty.
+        self.notice_bar = QgsMessageBar()
+        self.notice_bar.setSizePolicy(_QSIZEPOLICY_MINIMUM, _QSIZEPOLICY_FIXED)
+        self.notice_bar.hide()
+        layout.addWidget(self.notice_bar)
 
         layout.addWidget(QLabel("Katastrska občina"))
         self.ko_edit = AutocompleteEdit("Vnesi šifro ali ime KO ...")
@@ -651,6 +667,7 @@ class Parcele(QWidget):
             "eid_parcela": parcel["eid_parcela"],
             "number": parcel["number"],
             "sifko": self._selected_ko["sifko"],
+            "ko_name": self._selected_ko["name"],
             "bbox": [float(value) for value in bbox[:4]],
             "crs": "EPSG:3794",
             "geometry": geometry,
@@ -683,3 +700,9 @@ class Parcele(QWidget):
         if self._disposed:
             return
         self.status_label.setText(message)
+
+    def push_notice(self, title, text, level=0, duration=0):
+        if self._disposed:
+            return
+        self.notice_bar.show()
+        self.notice_bar.pushMessage(title, text, level=level, duration=duration)

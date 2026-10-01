@@ -43,6 +43,7 @@ from .resources import *
 from lxml import etree as ET
 import json
 
+import html
 import re
 import sys
 import traceback
@@ -2149,6 +2150,10 @@ class QNarcis:
             tab_widget = QTabWidget()
             self.iskalnik_tabs = tab_widget
 
+            taksoni_widget = Taksoni()
+            taksoni_widget.loginRequested.connect(self.apiLogin)
+            tab_widget.addTab(taksoni_widget, self.tr("Vrste"))
+
             self.parcele_widget = Parcele(searcher_id="parcele")
             self.parcele_widget.parcelSelected.connect(self.openParcelLayer)
             self.parcele_widget.searchChanged.connect(self._clearPendingParcel)
@@ -2159,10 +2164,6 @@ class QNarcis:
             self.parcele_lastnistvo_widget.searchChanged.connect(self._clearPendingParcel)
             self._lastnistvo_tab_index = tab_widget.addTab(
                 self.parcele_lastnistvo_widget, self.tr("Lastništvo parcel"))
-
-            taksoni_widget = Taksoni()
-            taksoni_widget.loginRequested.connect(self.apiLogin)
-            tab_widget.addTab(taksoni_widget, self.tr("Vrste"))
 
             tab_widget.currentChanged.connect(self._onIskalnikTabChanged)
 
@@ -2276,10 +2277,15 @@ class QNarcis:
                         "QNarcIS",
                         _QGIS_WARNING,
                     )
-                result_widget.set_result_message(
-                    self.tr("Prikazana je parcela")
-                    + " {} {}.".format(parcel.get('sifko', ''), parcel.get('number', ''))
-                )
+                ko_name = str(parcel.get('ko_name') or '').strip()
+                parcel_label = self.tr("Prikazana je parcela")
+                parcel_label += " {} katastrske občine {}.".format(
+                    parcel.get('number', ''), parcel.get('sifko', ''))
+                if ko_name:
+                    parcel_label = parcel_label[:-1] + " – {}.".format(ko_name)
+                result_widget.set_result_message(parcel_label)
+                if isinstance(parcel, dict) and parcel.get('searcher') == 'lastnistvo':
+                    self._maybe_show_lastnistvo_notice(qgz_layer_id, result_widget)
             except Exception:
                 QgsMessageLog.logMessage(
                     "Parcel zoom failed:\n{}".format(traceback.format_exc()),
@@ -2332,6 +2338,65 @@ class QNarcis:
     def _clearPendingParcel(self):
         self._pending_parcel = None
         self._clear_parcel_highlight()
+
+    def _maybe_show_lastnistvo_notice(self, qgz_layer_id, result_widget):
+        """Show the one-time informative-layer notice in the ownership tab.
+
+        Shown once per login username (the Geoserver authcfg is deleted on
+        QGIS close, so it cannot key a persistent flag; users often share
+        one QGIS profile, so the flag is never keyed by profile). Layer
+        metadata parts are appended only when present. Never raises: the
+        notice must not break parcel display.
+        """
+        try:
+            creds = getattr(self, 'geoserver_credentials', None)
+            user = creds.get('qnarcis_user') if isinstance(creds, dict) else None
+            user_key = re.sub(r"[/\\]", "_", str(user).strip()) if user else None
+            settings_key = "q_narcis/iskalnik/lastnistvo_parcel/notice/{}".format(
+                user_key or "brez_uporabnika"
+            )
+            settings = QSettings()
+            try:
+                already_shown = settings.value(settings_key, False, type=bool)
+            except (AttributeError, TypeError, ValueError):
+                already_shown = bool(settings.value(settings_key, False))
+            if already_shown:
+                return
+
+            metadata = {}
+            additional = getattr(self, 'additionalDataById', None)
+            if isinstance(additional, dict):
+                entry = additional.get(qgz_layer_id)
+                if isinstance(entry, dict):
+                    metadata = entry
+
+            parts = [self.tr("Sloj je informativne narave in je namenjen izključno pomoči uporabnikom.")]
+            stanje = str(metadata.get('stanje') or '').strip()
+            if stanje:
+                parts.append(self.tr("Stanje: {datum}.").format(datum=html.escape(stanje)))
+            url = str(metadata.get('url') or '').strip()
+            if url:
+                link_text = str(metadata.get('description') or '').strip() or self.tr("povezava")
+                parts.append('<a href="{href}">{text}</a>'.format(
+                    href=html.escape(url, quote=True),
+                    text=html.escape(link_text),
+                ))
+
+            try:
+                widget_deleted = result_widget is None or sip.isdeleted(result_widget)
+            except (AttributeError, TypeError):
+                widget_deleted = result_widget is None
+            push_notice = getattr(result_widget, 'push_notice', None)
+            if widget_deleted or push_notice is None:
+                return
+            push_notice("QNarcIS", " ".join(parts), level=_QGIS_INFO)
+            settings.setValue(settings_key, True)
+        except Exception:
+            QgsMessageLog.logMessage(
+                "Ownership notice failed:\n{}".format(traceback.format_exc()),
+                "QNarcIS",
+                _QGIS_WARNING,
+            )
 
     def _show_parcel_highlight(self, parcel):
         """Draw a persistent outline of the selected parcel on the canvas.
