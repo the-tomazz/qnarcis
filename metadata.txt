@@ -7,8 +7,8 @@ name=QNarcIS
 qgisMinimumVersion=3.28.4
 qgisMaximumVersion=4.99
 description=SL: QGIS-vticnik za informacijski sistem za naravo - NarcIS | EN: QGIS plugin for the Slovenian Nature Information System - NarcIS
-version=3.4.1-RC5
-changelog=3.4.1-RC5 (2026-10-02): release candidate for user testing - public ZKN parcel polygons and numbers now render together in a single WMS layer; matching separate RC4 number overlays are removed after a successful transition; existing WMS settings are preserved and the original source is restored if setup fails; works in QGIS 3 and QGIS 4.
+version=3.4.1
+changelog=3.4.1 (2026-10-02): Added parcel search using public cadastral (ZKN) and protected parcel ownership layers, with autocomplete for cadastral municipalities and parcel numbers, cached server-side lookups, parcel highlighting and map zoom. Parcel polygons and numbers displayed in a single WMS layer. Added a notice clarifying the informational nature of parcel ownership data.
 author=Spatial mind (info@spatialmind.org) for Slovenian Environment Agency - ARSO (narcis.arso@gov.si)
 email=narcis.arso@gov.si
 
