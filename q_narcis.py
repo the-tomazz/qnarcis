@@ -29,7 +29,7 @@ except ImportError:
     from qgis.PyQt.QtWidgets import QAction
 from qgis.PyQt.QtWidgets import QMenu, QToolButton
 from qgis.PyQt.QtWidgets import QTabWidget, QMessageBox, QDialog, QComboBox, QCheckBox, QWidget, QTreeView, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTableView, QPushButton, QInputDialog, QProgressBar, QSizePolicy, QListWidget
-from qgis.core import QgsApplication, QgsAuthMethodConfig
+from qgis.core import QgsApplication, QgsAuthMethodConfig, QgsDataSourceUri
 from qgis.core import QgsSettings, QgsBlockingNetworkRequest, QgsRectangle, QgsReferencedRectangle, QgsCoordinateReferenceSystem, QgsCoordinateTransform
 from qgis.PyQt.QtNetwork import QNetworkRequest
 
@@ -52,7 +52,7 @@ _URL_RE = re.compile(r"""url=(["'])(.*?)\1""", re.IGNORECASE)
 
 # Server-side style rendering parcel numbers (labels only, no polygons).
 _PARCEL_LABELS_STYLE = "nep_kn_parcele_lbl"
-_PARCEL_LABELS_NAME_SUFFIX = " – številke"
+_PARCEL_POLYGONS_STYLE = "nep_kn_parcele"
 
 import configparser
 
@@ -763,7 +763,6 @@ class QNarcis:
         """
         self.locked_layers = {}         #here I store all layers marked as lock
         self.locked_layers_by_id = {}   #here I store locked layer properties by id
-        self._parcel_labels_layer = None  #reused WMS parcel-numbers overlay
 
         """
         all layers storage
@@ -2273,9 +2272,9 @@ class QNarcis:
             try:
                 # KO layer first so the parcel layer stays the active layer.
                 self._open_ko_layer_quietly()
-                self._show_layer_and_zoom_to_parcel(layer, parcel)
                 if not (isinstance(parcel, dict) and parcel.get('searcher') == 'lastnistvo'):
-                    self._open_parcel_labels_quietly(layer)
+                    self._combine_parcel_wms_quietly(layer)
+                self._show_layer_and_zoom_to_parcel(layer, parcel)
                 try:
                     self._show_parcel_highlight(parcel)
                 except Exception:
@@ -2566,89 +2565,64 @@ class QNarcis:
                 _QGIS_WARNING,
             )
 
-    def _open_parcel_labels_quietly(self, polygon_layer):
-        """Add the WMS parcel-numbers overlay above the polygon layer.
+    def _combine_parcel_wms_quietly(self, layer):
+        """Render parcel polygons and numbers in one WMS layer/GetMap.
 
-        Same WMS source, server-side label style: numbers render only when
-        zoomed in (server scale hint) and vanish on zoom out by themselves.
-        Best effort only: failures are logged and never affect the already
-        opened parcel layer.
+        Restore the original source on failure. Remove only the matching
+        RC4 overlay after the combined provider has initialized successfully.
         """
+        original_source = None
+        changed = False
         try:
-            provider = polygon_layer.providerType() if polygon_layer is not None else ""
-            if provider != "wms":
-                QgsMessageLog.logMessage(
-                    "Parcel labels skipped: provider={!r}.".format(provider),
-                    "QNarcIS", _QGIS_INFO,
-                )
+            if layer is None or layer.providerType() != "wms":
                 return
-            base_source = polygon_layer.source()
-            # QGIS normalizes URI values (e.g. ':' becomes '%3A'). Decode
-            # parameters for validation, but retain the original source URI.
-            layers = [value for key, value in parse_qsl(base_source, keep_blank_values=True)
-                      if key == "layers"]
-            if layers != ["SI.GURS.KN:PARCELE"]:
-                QgsMessageLog.logMessage(
-                    "Parcel labels skipped: layers={!r}.".format(layers),
-                    "QNarcIS", _QGIS_INFO,
-                )
+            original_source = layer.source()
+            uri = QgsDataSourceUri()
+            uri.setEncodedUri(original_source)
+            parcel_type = "SI.GURS.KN:PARCELE"
+            layers = uri.params("layers")
+            styles = [_PARCEL_POLYGONS_STYLE, _PARCEL_LABELS_STYLE]
+            if layers not in ([parcel_type], [parcel_type, parcel_type]):
                 return
-            label_source, count = re.subn(
-                r"(^|&)styles(?:=[^&]*)?(?=&|$)",
-                r"\g<1>styles=" + _PARCEL_LABELS_STYLE,
-                base_source,
-            )
-            if count == 0:
-                separator = "" if label_source.endswith("&") else "&"
-                label_source = label_source + separator + "styles=" + _PARCEL_LABELS_STYLE
+            if layers != [parcel_type, parcel_type] or uri.params("styles") != styles:
+                uri.removeParam("layers")
+                uri.removeParam("styles")
+                # Repeated string parameters work in both Qt5 and Qt6 bindings.
+                for style in styles:
+                    uri.setParam("layers", parcel_type)
+                    uri.setParam("styles", style)
+                changed = True
+                layer.setDataSource(bytes(uri.encodedUri()).decode("utf-8"), layer.name(), "wms")
+                if not layer.isValid():
+                    raise RuntimeError("Combined parcel WMS provider is not valid")
 
+            # Migration from RC4: never remove unrelated/user-created overlays.
             project = QgsProject.instance()
-            label_parameters = sorted(parse_qsl(label_source, keep_blank_values=True))
-            label_layer = getattr(self, '_parcel_labels_layer', None)
-            if (label_layer is None or sip.isdeleted(label_layer)
-                    or not label_layer.isValid()
-                    or project.mapLayer(label_layer.id()) is None
-                    or sorted(parse_qsl(label_layer.source(), keep_blank_values=True)) != label_parameters):
-                # Also reuse overlays restored from a saved project/reload.
-                label_layer = next((candidate for candidate in project.mapLayers().values()
-                                    if candidate.providerType() == "wms"
-                                    and sorted(parse_qsl(candidate.source(), keep_blank_values=True)) == label_parameters
-                                    and candidate.isValid()), None)
-            if label_layer is None:
-                label_layer = QgsRasterLayer(
-                    label_source, polygon_layer.name() + _PARCEL_LABELS_NAME_SUFFIX, "wms",
-                )
-                if not label_layer.isValid():
-                    QgsMessageLog.logMessage(
-                        "Parcel labels layer is not valid.", "QNarcIS", _QGIS_WARNING,
-                    )
-                    return
-                project.addMapLayer(label_layer, False)
-
-            root = project.layerTreeRoot()
-            polygon_node = root.findLayer(polygon_layer.id())
-            label_node = root.findLayer(label_layer.id())
-            if polygon_node is not None and polygon_node.parent() is not None:
-                parent = polygon_node.parent()
-                siblings = parent.children()
-                position = siblings.index(polygon_node)
-                if (label_node is None or label_node.parent() != parent
-                        or position == 0 or siblings[position - 1] != label_node):
-                    if label_node is not None:
-                        clone = label_node.clone()
-                        label_node.parent().removeChildNode(label_node)
-                        parent.insertChildNode(parent.children().index(polygon_node), clone)
-                    else:
-                        parent.insertLayer(position, label_layer)
-            elif label_node is None:
-                root.insertLayer(0, label_layer)
-            self._ensure_layer_tree_visible(label_layer)
-            self._parcel_labels_layer = label_layer
+            old_ids = []
+            for candidate in project.mapLayers().values():
+                if (candidate.id() == layer.id() or candidate.providerType() != "wms"
+                        or candidate.name() != layer.name() + " – številke"):
+                    continue
+                old_uri = QgsDataSourceUri()
+                old_uri.setEncodedUri(candidate.source())
+                if (old_uri.params("url") == uri.params("url")
+                        and old_uri.params("layers") == [parcel_type]
+                        and old_uri.params("styles") == [_PARCEL_LABELS_STYLE]):
+                    old_ids.append(candidate.id())
+            if old_ids:
+                project.removeMapLayers(old_ids)
         except Exception:
+            if changed and original_source is not None:
+                try:
+                    layer.setDataSource(original_source, layer.name(), "wms")
+                except Exception:
+                    QgsMessageLog.logMessage(
+                        "Parcel WMS source restoration failed:\n{}".format(traceback.format_exc()),
+                        "QNarcIS", _QGIS_WARNING,
+                    )
             QgsMessageLog.logMessage(
-                "Parcel labels activation failed:\n{}".format(traceback.format_exc()),
-                "QNarcIS",
-                _QGIS_WARNING,
+                "Combined parcel WMS setup failed:\n{}".format(traceback.format_exc()),
+                "QNarcIS", _QGIS_WARNING,
             )
 
     def _show_layer_and_zoom_to_parcel(self, layer, parcel):
