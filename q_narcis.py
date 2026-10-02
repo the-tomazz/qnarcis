@@ -1448,6 +1448,11 @@ class QNarcis:
                 try:
                     source = layer.source()
                 except Exception:
+                    QgsMessageLog.logMessage(
+                        "Could not read layer source during logout; skipping layer.",
+                        "QNarcIS",
+                        _QGIS_WARNING,
+                    )
                     continue
                 if source and any(gsrv_id in source for gsrv_id in gsrv_ids):
                     new_source = re.sub(r"authcfg=[^\s'\"]+", "", source).strip()
@@ -1463,7 +1468,11 @@ class QNarcis:
             try:
                 self.iface.mapCanvas().refresh()
             except Exception:
-                pass
+                QgsMessageLog.logMessage(
+                    "Could not refresh map canvas during logout.",
+                    "QNarcIS",
+                    _QGIS_WARNING,
+                )
         except Exception:
             QgsMessageLog.logMessage(
                 "Logout layer cleanup failed:\n{}".format(traceback.format_exc()),
@@ -1533,7 +1542,11 @@ class QNarcis:
         try:
             self._clear_parcel_highlight()
         except Exception:
-            pass
+            QgsMessageLog.logMessage(
+                "Could not clear parcel highlight while unloading plugin.",
+                "QNarcIS",
+                _QGIS_WARNING,
+            )
         self.deleteAllGeoserverConfigs()
 
         for widget_attr in ('parcele_widget', 'parcele_lastnistvo_widget'):
@@ -2521,7 +2534,11 @@ class QNarcis:
                 band.reset(_QGIS_GEOMETRY_POLYGON)
                 band.hide()
         except Exception:
-            pass
+            QgsMessageLog.logMessage(
+                "Could not clear parcel highlight.",
+                "QNarcIS",
+                _QGIS_WARNING,
+            )
 
     def _ensure_layer_tree_visible(self, layer):
         if layer is None or sip.isdeleted(layer):
