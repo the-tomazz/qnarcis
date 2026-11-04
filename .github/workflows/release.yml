@@ -54,8 +54,19 @@ jobs:
             zip -r "qnarcis.${{ steps.meta.outputs.version }}.zip" qnarcis
           )
 
+      # GitHub CLI (preinstalled on the runner) instead of a third-party action,
+      # which would run unpinned code with this repository's write token.
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/qnarcis.${{ steps.meta.outputs.version }}.zip
-          generate_release_notes: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ZIP: dist/qnarcis.${{ steps.meta.outputs.version }}.zip
+        run: |
+          set -euo pipefail
+          # A re-run for the same tag replaces the asset instead of failing.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$ZIP" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$ZIP" --verify-tag --generate-notes
+          fi
