@@ -16,6 +16,38 @@ from qgis.PyQt.QtCore import pyqtSignal
 
 from .gsrv_utils import findGeoserverAuthConfig, build_url_with_params
 
+# Privzete vrednosti (= vgrajen ARSO profil). Uporabijo se, če widget dobi
+# storitev brez teh nastavitev ali brez profila.
+DEFAULT_TAXA_CATALOG_URL = "https://narcis.gov.si/ords/narcis/hr/katalog-vrst-v4"
+DEFAULT_OWS_URL = "https://narcis.gov.si/ows"
+DEFAULT_CRS_WFS = "EPSG:3794"
+DEFAULT_TAXA_LAYERS = (
+    ("SI.CKFF:NARCIS_TAX_LOK_POLIGONI", "poligoni"),
+    ("SI.CKFF:NARCIS_TAX_LOK_LINIJE", "linije"),
+    ("SI.CKFF:NARCIS_TAX_LOK_TOCKE", "tocke"),
+)
+DEFAULT_TAXA_FIELDS = {
+    'key': 'key',
+    'title': 'title',
+    'local_name': 'slovenskoimetax',
+    'rank': 'rang',
+    'children': 'children',
+    'taxon_id': 'TAX_ID',
+}
+DEFAULT_ROLE_SUFFIXES = (
+    ('INTERNA_RABA', '_INTERNO'),
+    ('STROKOVNA_GEN', '_STROK'),
+    ('REGISTRIRANA_GEN', '_REG'),
+)
+DEFAULT_CACHE_FILE = "katalog-vrst-v4.json"
+
+
+def _default_role_suffix(user_name):
+    for role, suffix in DEFAULT_ROLE_SUFFIXES:
+        if role in user_name:
+            return suffix
+    return ''
+
 _QT_USER_ROLE = getattr(Qt, "UserRole", None)
 if _QT_USER_ROLE is None:
     _QT_USER_ROLE = Qt.ItemDataRole.UserRole
@@ -80,10 +112,10 @@ def _push_message(title, text, level=0, duration=3):
 
 class DownloadTask(QgsTask):
     """QgsTask for downloading JSON data in the background"""
-    def __init__(self, json_file):
+    def __init__(self, json_file, url=DEFAULT_TAXA_CATALOG_URL):
         super().__init__("", _QGSTASK_CAN_CANCEL | _QGSTASK_SILENT | _QGSTASK_HIDDEN)
         self.json_file = json_file
-        self.url = "https://narcis.gov.si/ords/narcis/hr/katalog-vrst-v4"
+        self.url = url
         self.exception = None
         self.new_data = None
         self.changed = False
@@ -132,9 +164,15 @@ class DownloadTask(QgsTask):
 
 class Taksoni(QWidget):
     loginRequested = pyqtSignal(bool)
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, service=None, role_suffix=None, cache_file=DEFAULT_CACHE_FILE):
+        """
+        service:     country_profile.Service('taxa_search') ali None (privzete vrednosti)
+        role_suffix: funkcija GeoServer uporabnik -> pripona sloja (profil); None = privzete vloge
+        cache_file:  ime datoteke za predpomnilnik kataloga vrst (ločeno po profilu)
+        """
         super().__init__(parent)
-        self.json_file = os.path.join(os.path.dirname(__file__), "katalog-vrst-v4.json")
+        self._configure(service, role_suffix)
+        self.json_file = os.path.join(os.path.dirname(__file__), cache_file)
         self.data = None
         self.current_filter = ""
         self.loading_item = None
@@ -152,6 +190,23 @@ class Taksoni(QWidget):
         
         # Start background download
         self.start_download()
+
+    def _configure(self, service=None, role_suffix=None):
+        get = service.get if service is not None else (lambda key, default=None: default)
+        self._taxa_url = get('catalog_url') or DEFAULT_TAXA_CATALOG_URL
+        self._ows_url = get('ows_url') or DEFAULT_OWS_URL
+        self._crs_wfs = get('crs_wfs') or DEFAULT_CRS_WFS
+        layers = get('layers')
+        if isinstance(layers, list) and layers:
+            self._layers = tuple(
+                (str(item.get('name')), str(item.get('label') or item.get('name')))
+                for item in layers if isinstance(item, dict) and item.get('name'))
+        else:
+            self._layers = DEFAULT_TAXA_LAYERS
+        self._fields = dict(DEFAULT_TAXA_FIELDS)
+        if service is not None:
+            self._fields.update(service.fields())
+        self._role_suffix = role_suffix or _default_role_suffix
 
     def setup_ui(self):
         # Layout
@@ -179,7 +234,7 @@ class Taksoni(QWidget):
         """Start background download of JSON data using QgsTask"""
         if not os.path.exists(self.json_file):
             self.show_busy_row()  # show spinner immediately
-        task = DownloadTask(self.json_file)
+        task = DownloadTask(self.json_file, self._taxa_url)
         task.taskCompleted.connect(lambda: self.on_download_complete(task.new_data, task.changed))
         task.taskTerminated.connect(self.on_download_failed)
         QgsApplication.taskManager().addTask(task)
@@ -225,37 +280,39 @@ class Taksoni(QWidget):
         self.populate_tree(text)
 
     def find_matches(self, nodes, search_text, matches):
+        f = self._fields
         for node in nodes:
-            title = node.get('title', '').lower()
-            slovenskoimetax = node.get('slovenskoimetax', '').lower()
+            title = node.get(f['title'], '').lower()
+            slovenskoimetax = node.get(f['local_name'], '').lower()
 
             if search_text in title or search_text in slovenskoimetax:
                 matches.append(node)
-            if 'children' in node:
-                self.find_matches(node['children'], search_text, matches)
+            if f['children'] in node:
+                self.find_matches(node[f['children']], search_text, matches)
 
     def add_item(self, parent, node, search_text=""):
         item = QTreeWidgetItem()
+        f = self._fields
+
+        if f['key'] in node:
+            item.setData(0, _QT_USER_ROLE, node[f['key']])
         
-        if 'key' in node:
-            item.setData(0, _QT_USER_ROLE, node['key'])
-        
-        title = node.get('title', '')
-        slovenskoimetax = node.get('slovenskoimetax', '')
+        title = node.get(f['title'], '')
+        slovenskoimetax = node.get(f['local_name'], '')
         
         display_text = title
         if slovenskoimetax:
             display_text = f"{title} | {slovenskoimetax}"
         
         item.setText(0, display_text)
-        item.setText(1, node.get('rang', ''))
+        item.setText(1, node.get(f['rank'], ''))
 
         if parent is None:
             self.tree.addTopLevelItem(item)
         else:
             parent.addChild(item)
 
-        for child in node.get('children', []):
+        for child in node.get(f['children'], []):
             self.add_item(item, child, search_text)
 
         return item
@@ -289,11 +346,7 @@ class Taksoni(QWidget):
             species_group = subgroup.addGroup(species_group_name)
 
         # Now add all layers
-        layers = {
-            "SI.CKFF:NARCIS_TAX_LOK_POLIGONI": "poligoni",
-            "SI.CKFF:NARCIS_TAX_LOK_LINIJE": "linije",
-            "SI.CKFF:NARCIS_TAX_LOK_TOCKE": "tocke"
-        }
+        layers = dict(self._layers)
 
         service = 'WMS'
         MAX_URL_LENGTH = 8000  # GET request limit
@@ -399,9 +452,9 @@ class Taksoni(QWidget):
         *,
         keys=None,                    # list/iterable for TAX_ID IN (...)
         cql = None,       # explicit CQL_FILTER; overrides keys if both given
-        base_url = "https://narcis.gov.si/ows",   # OWS root; we'll add /wms or /wfs
+        base_url = None,         # OWS root (None = iz profila); we'll add /wms or /wfs
         crs_wms = "EPSG:3857",
-        crs_wfs = "EPSG:3794",
+        crs_wfs = None,          # None = iz profila
         version_wms = "1.3.0",
         version_wfs = "auto",    # or "2.0.0"
         image_format = "image/png",
@@ -426,24 +479,26 @@ class Taksoni(QWidget):
         if service not in ("WMS", "WFS"):
             raise ValueError("service must be 'WMS' or 'WFS'")
 
+        if base_url is None:
+            base_url = getattr(self, '_ows_url', DEFAULT_OWS_URL)
+        if crs_wfs is None:
+            crs_wfs = getattr(self, '_crs_wfs', DEFAULT_CRS_WFS)
+        fields = getattr(self, '_fields', DEFAULT_TAXA_FIELDS)
+        role_suffix = getattr(self, '_role_suffix', _default_role_suffix)
+
         # auth profile (your function)
         auth_id, _config_name, user_name = findGeoserverAuthConfig()
 
         layer_name_postposition = ''
         if (auth_id):
-            if 'INTERNA_RABA' in user_name:
-                layer_name_postposition = '_INTERNO'
-            elif 'STROKOVNA_GEN' in user_name:
-                layer_name_postposition = '_STROK'
-            elif 'REGISTRIRANA_GEN' in user_name:
-                layer_name_postposition = '_REG'
+            layer_name_postposition = role_suffix(user_name or '')
 
         layer_name = layer_name + layer_name_postposition
 
         # CQL from keys if given
         if keys and not cql:
             keys_str = ",".join(f"{k}" for k in keys)
-            cql = f"TAX_ID IN ({keys_str})"
+            cql = f"{fields['taxon_id']} IN ({keys_str})"
 
         # inner base url
         inner_base = f"{base_url.rstrip('/')}/{service.lower()}"

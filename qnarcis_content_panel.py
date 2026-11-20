@@ -90,11 +90,47 @@ class QNarcisContentPanel:
         "[**odstraniti predhodni zapis uporabnika QNarcIS vtičnika**](https://gis.arso.gov.si/related/qnarcis/delovanje/odstranitev_auth.png)",
     )
 
-    def __init__(self, iface, mode, country_code="SI", translations=None):
+    DEFAULT_NEWS_LINKS = (
+        ("https://narcis.gov.si/ords/r/narcis/narcis/viri-financiranja", "Viri financiranja"),
+        ("https://www.facebook.com/lifenarcis.si", "NarcIS facebook"),
+        ("https://www.arso.gov.si", "Agencija RS za okolje"),
+    )
+    DEFAULT_HELP_LINKS_SI = (
+        ("https://narcis.gov.si/ords/r/narcis/narcis", "Spletni portal NarcIS"),
+    )
+    DEFAULT_IMAGE_HOSTS = ("gis.arso.gov.si",)
+
+    def __init__(self, iface, mode, country_code="SI", translations=None,
+                 tr=None, news_service=None, help_service=None, help_lang=None, logo_path=None):
+        """
+        tr:           prevajalna funkcija vtičnika (profil); None = dosedanje vedenje
+        news_service: country_profile.Service('news') ali None (privzeto ARSO)
+        help_service: country_profile.Service('help') ali None (privzeto ARSO)
+        help_lang:    mapa lokalne pomoči v docs/ ("si", "en", npr. "mk"); None = po državi
+        logo_path:    logotip ob povezavah v obvestilih; None = NarcIS logotip
+        """
         self.iface = iface
         self.mode = mode  # "objave" or "pomoc"
         self.country_code = country_code
         self.translations = translations or {}
+        self._tr = tr
+        self._help_lang = help_lang
+        self._logo_path = logo_path
+
+        if news_service is not None:
+            self.FORUM_URL = news_service.get("url") or self.FORUM_URL
+            self._news_links = self._links_from_service(news_service, self.DEFAULT_NEWS_LINKS)
+            hosts = news_service.get("image_hosts")
+            self._image_hosts = tuple(h.lower() for h in hosts if isinstance(h, str)) \
+                if isinstance(hosts, list) else self.DEFAULT_IMAGE_HOSTS
+        else:
+            self._news_links = list(self.DEFAULT_NEWS_LINKS)
+            self._image_hosts = self.DEFAULT_IMAGE_HOSTS
+
+        if help_service is not None:
+            self._help_links = self._links_from_service(help_service, ())
+        else:
+            self._help_links = list(self.DEFAULT_HELP_LINKS_SI) if self.country_code == "SI" else []
 
         self.plugin_dir = os.path.dirname(__file__)
         self.help_dir = os.path.join(self.plugin_dir, "docs")
@@ -110,7 +146,18 @@ class QNarcisContentPanel:
         self.links_container = None
         self._image_data_uri_cache = OrderedDict()
 
+    @staticmethod
+    def _links_from_service(service, default):
+        links = service.get("links")
+        if not isinstance(links, list):
+            return list(default)
+        return [(item["url"], item.get("title") or item["url"]) for item in links
+                if isinstance(item, dict) and isinstance(item.get("url"), str)]
+
     def tr(self, message):
+        if self._tr is not None:
+            return self._tr(message)
+
         if self.country_code == "SI":
             return message
 
@@ -192,13 +239,7 @@ class QNarcisContentPanel:
             items = sorted(items, key=self._article_sort_key, reverse=True)
             self._set_html_content(self._build_forum_html(items))
 
-        self._set_links(
-            [
-                ("https://narcis.gov.si/ords/r/narcis/narcis/viri-financiranja", "Viri financiranja"),
-                ("https://www.facebook.com/lifenarcis.si", "NarcIS facebook"),
-                ("https://www.arso.gov.si", "Agencija RS za okolje"),
-            ]
-        )
+        self._set_links(list(self._news_links))
 
         if not self.timer.isActive():
             self.timer.start(60 * 60000)
@@ -208,8 +249,10 @@ class QNarcisContentPanel:
         self.dockwidget.setWindowTitle(self.tr("QNarcIS - pomoč"))
         self._set_pinned_message("", "medium")
 
-        lang = "si" if self.country_code == "SI" else "en"
+        lang = self._help_lang or ("si" if self.country_code == "SI" else "en")
         help_path = os.path.join(self.help_dir, lang, "index.html")
+        if not os.path.exists(help_path):
+            help_path = os.path.join(self.help_dir, "en", "index.html")
 
         browser = QTextBrowser()
         browser.setOpenExternalLinks(False)
@@ -219,8 +262,7 @@ class QNarcisContentPanel:
 
         self._replace_layout_content(self.content_container, [browser])
 
-        links = [("https://narcis.gov.si/ords/r/narcis/narcis", "Spletni portal NarcIS")] if self.country_code == "SI" else []
-        self._set_links(links)
+        self._set_links(list(self._help_links))
 
     def _set_html_content(self, html_content):
         browser = QTextBrowser()
@@ -255,7 +297,7 @@ class QNarcisContentPanel:
 
         # Keep legacy-like visual layout for "objave": links on the left, logo on the right.
         if links and self.mode == "objave":
-            logo_path = os.path.join(self.plugin_dir, "icons", "NarcIS-logo-RB-cropped.png")
+            logo_path = self._logo_path or os.path.join(self.plugin_dir, "icons", "NarcIS-logo-RB-cropped.png")
             if os.path.exists(logo_path):
                 logo_label = QLabel()
                 align_hcenter = getattr(Qt, "AlignHCenter", None)
@@ -528,7 +570,7 @@ class QNarcisContentPanel:
     def _is_allowed_inline_image(self, url):
         try:
             parsed = urlparse(url)
-            return parsed.scheme in ("http", "https") and parsed.netloc.lower() == "gis.arso.gov.si"
+            return parsed.scheme in ("http", "https") and parsed.netloc.lower() in self._image_hosts
         except Exception:
             return False
 

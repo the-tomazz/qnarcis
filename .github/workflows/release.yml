@@ -48,6 +48,7 @@ jobs:
             --exclude '.git' \
             --exclude '.github' \
             --exclude '/dist/' \
+            --exclude '/tests/' \
             ./ dist/qnarcis/
           (
             cd dist
@@ -68,5 +69,11 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "$ZIP" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" "$ZIP" --verify-tag --generate-notes
+            # Release candidates (v3.5.1-RC1 ...) are marked as pre-release, so
+            # "Latest" stays on the last final release.
+            prerelease=()
+            if [[ "$GITHUB_REF_NAME" =~ -(rc|RC|alpha|beta|dev)[0-9.]*$ ]]; then
+              prerelease=(--prerelease)
+            fi
+            gh release create "$GITHUB_REF_NAME" "$ZIP" --verify-tag --generate-notes "${prerelease[@]}"
           fi

@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "id": "arso-narcis-si",
+  "name": "ARSO NarcIS - Slovenija",
+  "organization": "Agencija Republike Slovenije za okolje",
+  "profile_version": "builtin",
+  "catalog_code": "SI",
+  "language": "sl",
+  "base_url": "https://narcis.gov.si",
+  "branding": {
+    "portal_name": "NarcIS",
+    "portal_url": "https://narcis.gov.si/ords/r/narcis/narcis",
+    "login_portal_url": "https://narcis.gov.si"
+  },
+  "services": {
+    "catalog": { "index_url": "{base_url}/ords/narcis/hr/qgz" },
+    "login": {
+      "url": "{base_url}/ords/narcis/qnarcis-protected/get-user/",
+      "no_access_value": "n/a",
+      "roles": {
+        "INTERNA_RABA": { "suffix": "_INTERNO" },
+        "STROKOVNA_GEN": { "suffix": "_STROK" },
+        "REGISTRIRANA_GEN": { "suffix": "_REG" }
+      }
+    },
+    "send_polygon": {
+      "url": "{base_url}/ords/narcis/qnarcis-protected/send-polygon/",
+      "result_url": "{base_url}/ords/r/narcis/narcis/test-qgis?p62_obmocje_id={area_id}"
+    },
+    "send_layer": {
+      "url": "{base_url}/ords/narcis/hr/qnarcis/poslji-sloj",
+      "result_url": "{base_url}/ords/r/narcis/narcis/spletni-gis1?p257_izbrani_sloj_id={layer_id}&p257_zoom=Y",
+      "accepted_crs": ["EPSG:3794"]
+    },
+    "taxa_search": {
+      "catalog_url": "{base_url}/ords/narcis/hr/katalog-vrst-v4",
+      "ows_url": "{base_url}/ows",
+      "crs_wfs": "EPSG:3794",
+      "layers": [
+        { "name": "SI.CKFF:NARCIS_TAX_LOK_POLIGONI", "label": "poligoni" },
+        { "name": "SI.CKFF:NARCIS_TAX_LOK_LINIJE", "label": "linije" },
+        { "name": "SI.CKFF:NARCIS_TAX_LOK_TOCKE", "label": "tocke" }
+      ]
+    },
+    "parcels": {
+      "wfs_url": "https://ipi.eprostor.gov.si/wfs-si-gurs-kn/wfs",
+      "ko_layer": "SI.GURS.KN:KATASTRSKE_OBCINE",
+      "parcel_layer": "SI.GURS.KN:PARCELE",
+      "crs": "EPSG:3794"
+    },
+    "parcel_ownership": {},
+    "news": {
+      "url": "{base_url}/ords/narcis/hr/qgisforum",
+      "image_hosts": ["gis.arso.gov.si"],
+      "links": [
+        { "title": "Viri financiranja", "url": "{base_url}/ords/r/narcis/narcis/viri-financiranja" },
+        { "title": "NarcIS facebook", "url": "https://www.facebook.com/lifenarcis.si" },
+        { "title": "Agencija RS za okolje", "url": "https://www.arso.gov.si" }
+      ]
+    },
+    "help": {
+      "links": [
+        { "title": "Spletni portal NarcIS", "url": "{base_url}/ords/r/narcis/narcis" }
+      ]
+    },
+    "map_template": {}
+  },
+  "default_layers": [
+    ["Pregledna topografska karta"],
+    ["DOF (2023 - 2025)"],
+    ["DOF 2022 - 2024", "DOF 2022 – 2024"]
+  ]
+}

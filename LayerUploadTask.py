@@ -135,6 +135,35 @@ def _to_jsonable(v):
 
 
 # ---------------------- main-thread poster (queued) ----------------------
+# Privzete vrednosti (= vgrajen ARSO profil, storitev send_layer).
+DEFAULT_UPLOAD_FIELDS = {
+    'user': 'uporabnik',
+    'password': 'key',  # nosec B105 - ime polja v API klicu, ne geslo  # pragma: allowlist secret
+    'layer_name': 'ime_sloja',
+    'note': 'opomba',
+    'username': 'uname',
+    'bbox': 'bbox',
+    'session_id': 'uid',
+    'batch_index': 'batch_index',
+    'batch_count': 'batch_count',
+    'feature_count': 'feature_count',
+    'fid_source': 'fid_source',
+    'status': 'Status',
+    'message': 'Sporocilo',
+    'layer_id': 'layer_id',
+}
+DEFAULT_RESULT_URL = "https://narcis.gov.si/ords/r/narcis/narcis/spletni-gis1?p257_izbrani_sloj_id={layer_id}&p257_zoom=Y"
+_DEFAULT_MESSAGE_KEYS = ("Sporočilo", "Sporocilo", "message", "error", "detail", "msg")
+
+
+def _merge_fields(fields):
+    merged = dict(DEFAULT_UPLOAD_FIELDS)
+    for key, value in (fields or {}).items():
+        if key in merged and value:
+            merged[key] = value
+    return merged
+
+
 class _Poster(QObject):
     """
     Runs in the main (GUI) thread. Receives post requests via a queued signal,
@@ -142,8 +171,12 @@ class _Poster(QObject):
     """
     batchFinished = pyqtSignal(int, int, bool, dict)  # (batch_idx, n_feats, ok, resp)
 
-    def __init__(self, api_url, username, password, max_concurrent=1, parent=None):
+    F = DEFAULT_UPLOAD_FIELDS
+
+    def __init__(self, api_url, username, password, max_concurrent=1, parent=None, fields=None):
         super().__init__(parent)
+        if fields:
+            self.F = _merge_fields(fields)
         from qgis.core import QgsNetworkAccessManager
         self._nam = QgsNetworkAccessManager.instance()
         self._original_timeout = self._nam.timeout()
@@ -211,16 +244,17 @@ class _Poster(QObject):
             if not isinstance(resp, dict):
                 return None
 
-            status_text = str(resp.get("Status", "") or "")
-            msg_text = str(
-                resp.get("Sporočilo")
-                or resp.get("Sporocilo")
-                or resp.get("message")
-                or resp.get("error")
-                or resp.get("detail")
-                or resp.get("msg")
-                or ""
-            )
+            status_text = str(resp.get(self.F['status'], "") or "")
+            message_keys = _DEFAULT_MESSAGE_KEYS
+            if self.F['message'] not in message_keys:
+                message_keys = (self.F['message'],) + message_keys
+            msg_text = ""
+            for key in message_keys:
+                value = resp.get(key)
+                if value:
+                    msg_text = value
+                    break
+            msg_text = str(msg_text or "")
 
             text = (status_text + " " + msg_text).lower()
             if "geometrij" in text and ("manj kot" in text or "presega" in text or "limit" in text):
@@ -246,8 +280,8 @@ class _Poster(QObject):
         while self._queue and (not self._canceled) and len(self._inflight) < self._max_concurrent:
             batch_idx, n_feats, payload = self._queue.pop(0)
             req = QNetworkRequest(QUrl(self._api_url))
-            req.setRawHeader(b"uporabnik", self._username.encode("utf-8"))
-            req.setRawHeader(b"key", self._password.encode("utf-8"))
+            req.setRawHeader(self.F['user'].encode("utf-8"), self._username.encode("utf-8"))
+            req.setRawHeader(self.F['password'].encode("utf-8"), self._password.encode("utf-8"))
             req.setHeader(_QNETWORKREQUEST_CONTENT_TYPE_HEADER, "application/json")
             reply = self._nam.post(req, payload)
             self._inflight[reply] = (batch_idx, n_feats)
@@ -315,6 +349,8 @@ class LayerUploadTask(QgsTask):
     """
 
     DEFAULT_API_URL = "https://narcis.gov.si/ords/narcis/hr/qnarcis/poslji-sloj"
+    F = DEFAULT_UPLOAD_FIELDS
+    RESULT_URL = DEFAULT_RESULT_URL
     DEFAULT_BATCH_SIZE = 10              # fixed NUMBER of features per batch
     DEFAULT_MAX_CONCURRENT = 1           # max parallel POST requests
     DEFAULT_TARGET_CRS_AUTHID = None
@@ -334,9 +370,15 @@ class LayerUploadTask(QgsTask):
         stop_after_batches=DEFAULT_STOP_AFTER,
         description="NARCIS upload",
         selected_only=False,
-        max_units_limit=None   # None = unlimited. Unit = singlepart(1) or multipart(#parts)
+        max_units_limit=None,  # None = unlimited. Unit = singlepart(1) or multipart(#parts)
+        result_url=None,       # povezava na naložen sloj; {layer_id}; None = privzeto
+        fields=None            # preslikava imen polj (profil); None = privzeto
     ):
         super().__init__(description, _QGSTASK_CAN_CANCEL)
+        if fields:
+            self.F = _merge_fields(fields)
+        if result_url:
+            self.RESULT_URL = result_url
         if not username or not password:
             raise ValueError("username and password are required")
 
@@ -389,7 +431,7 @@ class LayerUploadTask(QgsTask):
         self._batch_idx = 0
 
         # Poster in MAIN thread + wiring
-        self._poster = _Poster(self._api_url, self._username, self._password, self._max_concurrent, parent=QgsApplication.instance())
+        self._poster = _Poster(self._api_url, self._username, self._password, self._max_concurrent, parent=QgsApplication.instance(), fields=fields)
         self.postRequested.connect(self._poster.onPostRequested, _QT_QUEUED_CONNECTION)
         self._poster.batchFinished.connect(self._on_batch_replied, _QT_QUEUED_CONNECTION)
 
@@ -629,7 +671,7 @@ class LayerUploadTask(QgsTask):
             try:
                 from qgis.PyQt.QtWidgets import QPushButton
                 from qgis.PyQt.QtGui import QDesktopServices
-                url = QUrl(f"https://narcis.gov.si/ords/r/narcis/narcis/spletni-gis1?p257_izbrani_sloj_id={int(self._layer_id)}&p257_zoom=Y")
+                url = QUrl(self.RESULT_URL.replace("{layer_id}", str(int(self._layer_id))))
 
                 msgw = iface.messageBar().createMessage(title, text)
                 btn = QPushButton("Povezava do naloženega sloja.")
@@ -668,16 +710,17 @@ class LayerUploadTask(QgsTask):
 
     # -------------------- helpers --------------------
     def _start_new_batch(self):
+        F = self.F
         props = {
-            "ime_sloja": self._layer.name(),
-            "opomba": "Poslano iz QGIS",
-            "uname": self._username,
-            "bbox": self._bbox,
-            "uid": self.session_uid,                   # SAME for all batches in this session
-            "batch_index": self._batch_idx + 1,
-            "batch_count": self._total_batches or None,
-            "feature_count": 0,
-            "fid_source": getattr(self, "fid_field_name", None) or "qgis_feature_id"
+            F["layer_name"]: self._layer.name(),
+            F["note"]: "Poslano iz QGIS",
+            F["username"]: self._username,
+            F["bbox"]: self._bbox,
+            F["session_id"]: self.session_uid,          # SAME for all batches in this session
+            F["batch_index"]: self._batch_idx + 1,
+            F["batch_count"]: self._total_batches or None,
+            F["feature_count"]: 0,
+            F["fid_source"]: getattr(self, "fid_field_name", None) or "qgis_feature_id"
         }
         props_b = json.dumps(props, ensure_ascii=False).encode("utf-8")
         self._prefix = b'{"type":"FeatureCollection","properties":' + props_b + b',"features":['
@@ -690,8 +733,8 @@ class LayerUploadTask(QgsTask):
 
         # Patch feature_count + batch_index
         props = json.loads(self._prefix.split(b'"features":',1)[0].split(b'"properties":',1)[1].rstrip(b','))  # quick hack
-        props["feature_count"] = n_feats
-        props["batch_index"] = self._batch_idx
+        props[self.F["feature_count"]] = n_feats
+        props[self.F["batch_index"]] = self._batch_idx
         new_prefix = b'{"type":"FeatureCollection","properties":' + json.dumps(props, ensure_ascii=False).encode("utf-8") + b',"features":['
 
         if self._buf_features:
@@ -721,7 +764,7 @@ class LayerUploadTask(QgsTask):
             self._ok_features += n_feats
             # remember layer_id if provided (same for the whole session)
             try:
-                lid = resp.get("layer_id", None)
+                lid = resp.get(self.F["layer_id"], None)
                 if lid is not None and self._layer_id is None:
                     self._layer_id = int(lid)
             except Exception:

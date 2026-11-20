@@ -39,13 +39,17 @@ class NetworkRequest():
 
         self.url = None
 
-    def send_request(self, username, password, payload):
-        self.url = url = "https://narcis.gov.si/ords/narcis/qnarcis-protected/send-polygon/"
+    DEFAULT_URL = "https://narcis.gov.si/ords/narcis/qnarcis-protected/send-polygon/"
+
+    def send_request(self, username, password, payload, url=None, fields=None):
+        """url/fields: iz profila (storitev send_polygon); None = privzeto."""
+        fields = fields or {}
+        self.url = url = url or self.DEFAULT_URL
         
         # Prepare the request
         request = QNetworkRequest(QUrl(url))
-        request.setRawHeader(b"uporabnik", f"{username}".encode('utf-8'))
-        request.setRawHeader(b"key", f"{password}".encode('utf-8'))
+        request.setRawHeader(fields.get('user', 'uporabnik').encode('utf-8'), f"{username}".encode('utf-8'))
+        request.setRawHeader(fields.get('password', 'key').encode('utf-8'), f"{password}".encode('utf-8'))
         request.setHeader(_QNETWORKREQUEST_CONTENT_TYPE_HEADER, "application/json")
         
         # Send the POST request with the WKT polygon

@@ -62,10 +62,14 @@ class PasswordEdit(QtWidgets.QLineEdit):
             self.togglePasswordAction.setIcon(self.hiddenIcon)
 
 class CustomCredentialsDialog(QtWidgets.QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, portal_name="NarcIS", portal_url="https://narcis.gov.si", login_host=None):
+        """
+        portal_name, portal_url: iz profila (branding); privzeto NarcIS.
+        login_host: strežnik, ki prejme geslo; prikaže se, če ni del portal_url.
+        """
         super().__init__(parent)
         
-        self.setWindowTitle("NarcIS - prijava")
+        self.setWindowTitle(f"{portal_name} - prijava")
         
         # Create the layout
         layout = QtWidgets.QFormLayout(self)
@@ -80,18 +84,23 @@ class CustomCredentialsDialog(QtWidgets.QDialog):
         self.password_input = PasswordEdit(self)
         layout.addRow(self.password_label, self.password_input)
 
-        custom_text = """<br>Vpisati je potrebno (samo pri prvi uporabi) vaš <b>uporabniški elektronski naslov (email) in geslo za portal NarcIS (https://narcis.gov.si).</b>
+        custom_text = f"""<br>Vpisati je potrebno (samo pri prvi uporabi) vaš <b>uporabniški elektronski naslov (email) in geslo za portal {portal_name} ({portal_url}).</b>
 <br><br>
 <b>Bodite pozorni</b>, da vpišete pravilni uporabniški elektronski naslov in geslo - če se vtičnik ne bo mogel prijaviti na sloj za shranjevanje poligonov,
-vas bo ob naslednji uporabi sloja spet vprašal za <b>NarcIS uporabniški elektronski naslov in geslo.</b>
+vas bo ob naslednji uporabi sloja spet vprašal za <b>{portal_name} uporabniški elektronski naslov in geslo.</b>
 <br><br>
 <b>Če se želite prijaviti z drugim elektronskim naslovom in geslom</b> je potrebno v nastavitvah QGIS-a (Settings/Options/Authentication),
 <b>zbrisati konfiguracijo z imenom qnarcis_oauth</b> in vtičnik vam bo spet ponudil možnost za vpis gesla.
 <br><br>
-Vpisani prijavni podatki v NarcIS portal so v enkriptirani obliki shranjeni v lokalni QGIS bazi prijavnih podatkov,
-zaščiteni z geslom, ki v splošnem ni enako kot geslo za NarcIS portal <b>(master authentication password)</b>.
+Vpisani prijavni podatki v {portal_name} portal so v enkriptirani obliki shranjeni v lokalni QGIS bazi prijavnih podatkov,
+zaščiteni z geslom, ki v splošnem ni enako kot geslo za {portal_name} portal <b>(master authentication password)</b>.
 <br><br>
 Če gesla za QGIS bazo prijavnih podatkov (master authentication password) še nimate nastavljenega, vam bo QGIS v naslednjem koraku ponudil tudi nastavitev le-tega."""
+
+        if login_host and login_host not in (portal_url or ''):
+            custom_text += f"""
+<br><br>
+<b>Uporabniško ime in geslo bosta poslana na strežnik: {login_host}</b>"""
 
         self.custom_text = QtWidgets.QLabel(custom_text)
         self.custom_text.setWordWrap(True)

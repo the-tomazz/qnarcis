@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "id": "arso-narcis-mk",
+  "name": "ARSO NarcIS - Severna Makedonija",
+  "organization": "Agencija Republike Slovenije za okolje",
+  "profile_version": "builtin",
+  "catalog_code": "MK",
+  "language": "en",
+  "base_url": "https://narcis.gov.si",
+  "branding": {
+    "portal_name": "NarcIS",
+    "portal_url": "https://narcis.gov.si/ords/r/narcis/narcis",
+    "login_portal_url": "https://narcis.gov.si"
+  },
+  "services": {
+    "catalog": { "index_url": "{base_url}/ords/narcis/hr/qgz" },
+    "help": {},
+    "map_template": {}
+  },
+  "default_layers": [["OpenStreetMap"]]
+}

@@ -28,7 +28,7 @@ try:
 except ImportError:
     from qgis.PyQt.QtWidgets import QAction
 from qgis.PyQt.QtWidgets import QMenu, QToolButton
-from qgis.PyQt.QtWidgets import QTabWidget, QMessageBox, QDialog, QComboBox, QCheckBox, QWidget, QTreeView, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTableView, QPushButton, QInputDialog, QProgressBar, QSizePolicy, QListWidget
+from qgis.PyQt.QtWidgets import QTabWidget, QMessageBox, QDialog, QComboBox, QCheckBox, QWidget, QTreeView, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTableView, QPushButton, QInputDialog, QProgressBar, QSizePolicy, QListWidget, QGroupBox, QFileDialog
 from qgis.core import QgsApplication, QgsAuthMethodConfig, QgsDataSourceUri
 from qgis.core import QgsSettings, QgsBlockingNetworkRequest, QgsRectangle, QgsReferencedRectangle, QgsCoordinateReferenceSystem, QgsCoordinateTransform
 from qgis.PyQt.QtNetwork import QNetworkRequest
@@ -41,6 +41,7 @@ from qgis.gui import (
 from .resources import *
 
 from lxml import etree as ET
+import copy
 import json
 
 import html
@@ -63,6 +64,8 @@ from .taksoni_widget import Taksoni
 from .parcele_widget import Parcele
 
 from .gsrv_utils import get_wms_layers_difference, findGeoserverAuthConfig
+from .narcis_map_template import create_narcis_layout, snapshot_canvas_settings
+from . import country_profile as cprof
 
 try:
     from qgis.PyQt import sip
@@ -85,7 +88,7 @@ from .LayerUploadTask import LayerUploadTask
 from .q_narcis_dockwidget import QNarcisDockWidget
 import os.path
 
-from qgis.PyQt.QtWidgets import QStyledItemDelegate
+from qgis.PyQt.QtWidgets import QStyledItemDelegate, QApplication
 
 # Custom delegate to handle clickable URLs
 class UrlDelegate(QStyledItemDelegate):
@@ -253,8 +256,10 @@ _QT_ALIGN_LEFT = _qt_alignment_flag('AlignLeft')
 _QT_ALIGN_RIGHT = _qt_alignment_flag('AlignRight')
 _QT_ALIGN_VCENTER = _qt_alignment_flag('AlignVCenter')
 _QT_ALIGN_BOTTOM = _qt_alignment_flag('AlignBottom')
+_QT_ALIGN_TOP = _qt_alignment_flag('AlignTop')
 _QT_FOREGROUND_ROLE = _qt_item_data_role('ForegroundRole')
 _QT_FONT_ROLE = _qt_item_data_role('FontRole')
+_QT_BACKGROUND_ROLE = _qt_item_data_role('BackgroundRole')
 _QT_LEFT_BUTTON = getattr(Qt, 'LeftButton', None)
 if _QT_LEFT_BUTTON is None:
     _QT_LEFT_BUTTON = Qt.MouseButton.LeftButton
@@ -355,13 +360,136 @@ _QPALETTE_LINK_ROLE = getattr(QPalette, 'Link', None)
 if _QPALETTE_LINK_ROLE is None:
     _QPALETTE_LINK_ROLE = QPalette.ColorRole.Link
 
+_QT_RICH_TEXT_FORMAT = getattr(Qt, 'RichText', None)
+if _QT_RICH_TEXT_FORMAT is None:
+    _QT_RICH_TEXT_FORMAT = Qt.TextFormat.RichText
+_QT_WAIT_CURSOR = getattr(Qt, 'WaitCursor', None)
+if _QT_WAIT_CURSOR is None:
+    _QT_WAIT_CURSOR = Qt.CursorShape.WaitCursor
+
+def _fit_wrapped_label(label, width):
+    """
+    Večvrstična oznaka (wordWrap) v dialogu s fiksno širino: Qt pri oknih ne
+    upošteva višine za dano širino, zato bi bila vidna le prva vrstica.
+    """
+    label.setMinimumHeight(0)
+    label.setMinimumHeight(label.heightForWidth(max(int(width), 100)))
+    layout = label.parentWidget().layout() if label.parentWidget() is not None else None
+    if layout is not None:
+        layout.activate()
+
+
 def _exec_dialog(dialog):
     exec_method = getattr(dialog, 'exec', None)
     if callable(exec_method):
         return exec_method()
     return getattr(dialog, 'exec_')()
 
-def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder=''):
+_XZ_MAGIC = b'\xfd7zXZ\x00'
+_CATALOG_ITEMS = ('vsi_sloji.xml', 'additional_layer_data.json', 'qml')
+
+# Uporabniška sporočila (ključi za tr) za znane napake pri nameščanju kataloga.
+CATALOG_ERR_HTML = "Strežnik kataloga slojev je namesto arhiva vrnil spletno stran (strežnik je morda v vzdrževanju)."
+CATALOG_ERR_NOT_ARCHIVE = "Prenesena datoteka ni veljaven arhiv kataloga slojev."
+CATALOG_ERR_DOWNLOAD = "Kataloga slojev ni bilo mogoče prenesti s strežnika."
+CATALOG_ERR_LOCAL_FILE = "Izbrana datoteka ni veljaven arhiv kataloga slojev."
+
+
+class CatalogInstallError(RuntimeError):
+    """Napaka pri nameščanju kataloga z jasnim sporočilom za uporabnika (user_message je ključ za tr)."""
+
+    def __init__(self, user_message, detail=''):
+        super().__init__(f"{user_message} {detail}".strip())
+        self.user_message = user_message
+
+
+def _check_catalog_payload(content):
+    """Preveri, da je prenesena vsebina xz arhiv in ne npr. HTML stran za vzdrževanje."""
+    if content.startswith(_XZ_MAGIC):
+        return
+    head = content[:512].lstrip().lower()
+    if head.startswith((b'<!doctype html', b'<html', b'<head', b'<?xml')) or b'<html' in head:
+        snippet = re.sub(r'\s+', ' ', content[:300].decode('utf-8', errors='replace')).strip()
+        raise CatalogInstallError(CATALOG_ERR_HTML, f"(prejeto {len(content)} B: {snippet!r})")
+    raise CatalogInstallError(CATALOG_ERR_NOT_ARCHIVE, f"(prejeto {len(content)} B, glava {content[:8]!r})")
+
+
+def _swap_catalog_items(staging_path, extract_path, backup_path):
+    """
+    Zamenja elemente kataloga (_CATALOG_ITEMS) v extract_path s pripravljenimi iz staging_path.
+    Stari elementi se najprej premaknejo v backup_path; ob napaki se stanje povrne.
+    Vse mape so pod extract_path (isti datotečni sistem), zato so premiki atomarni os.replace.
+    """
+    import shutil
+
+    os.makedirs(backup_path)
+    backed_up = []
+    installed = []
+    try:
+        for name in _CATALOG_ITEMS:
+            target = os.path.join(extract_path, name)
+            if os.path.lexists(target):
+                os.replace(target, os.path.join(backup_path, name))
+                backed_up.append(name)
+            os.replace(os.path.join(staging_path, name), target)
+            installed.append(name)
+    except Exception:
+        for name in installed:
+            target = os.path.join(extract_path, name)
+            try:
+                if os.path.isdir(target) and not os.path.islink(target):
+                    shutil.rmtree(target)
+                elif os.path.lexists(target):
+                    os.remove(target)
+            except Exception as rb_exc:
+                QgsMessageLog.logMessage(f"Catalog rollback: failed to remove new {name}: {rb_exc}", "QNarcIS", _QGIS_CRITICAL)
+        for name in backed_up:
+            try:
+                os.replace(os.path.join(backup_path, name), os.path.join(extract_path, name))
+            except Exception as rb_exc:
+                QgsMessageLog.logMessage(
+                    f"Catalog rollback: failed to restore {name} from {backup_path}: {rb_exc}", "QNarcIS", _QGIS_CRITICAL)
+        if not os.listdir(backup_path):
+            os.rmdir(backup_path)
+        raise
+
+    shutil.rmtree(backup_path, ignore_errors=True)
+
+
+def _catalog_cache_path(plugin_dir, cache_prefix, drzava, normalized_id, url):
+    """
+    Pot arhiva v _cached_qgz. Zgoščena vrednost URL-ja: po spremembi povezave
+    (npr. lastno gostovanje) se ne uporabi star arhiv z enakim številčnim id.
+    """
+    import hashlib
+    url_hash = hashlib.sha256(str(url).strip().encode('utf-8')).hexdigest()[:10]
+    return os.path.join(plugin_dir, '_cached_qgz',
+                        cache_prefix + str(drzava) + '_' + normalized_id + '_' + url_hash + '.tar.xz')
+
+
+def _legacy_catalog_cache_path(plugin_dir, drzava, normalized_id):
+    """
+    Ime arhiva iz izdaj pred profili (npr. _cached_qgz/MK_123.tar.xz). Nekateri
+    uporabniki arhiv ročno skopirajo pod tem imenom, ko povezava v indeksu ne deluje.
+    """
+    return os.path.join(plugin_dir, '_cached_qgz', str(drzava) + '_' + normalized_id + '.tar.xz')
+
+
+def _cached_catalog_candidates(plugin_dir, cache_prefix, drzava, normalized_id, url):
+    return [_catalog_cache_path(plugin_dir, cache_prefix, drzava, normalized_id, url),
+            _legacy_catalog_cache_path(plugin_dir, drzava, normalized_id)]
+
+
+def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder='', settings_prefix='q_narcis/', cache_prefix='',
+               download_timeout=60, local_archive=None):
+    """
+    settings_prefix: predpona ključev QgsSettings (profil); privzeto 'q_narcis/';
+                     None = ne zapiši ničesar v nastavitve (predogled kataloga)
+    cache_prefix:    predpona datotek v _cached_qgz (profil); privzeto brez
+    local_archive:   pot do lokalnega arhiva .tar.xz (uvoz iz datoteke); brez
+                     predpomnilnika in prenosa. id je lahko None (indeks ni
+                     dosegljiv) – takrat se qgz_version ne zapiše.
+    """
     try:
         def _iter_safe_catalog_members(tar):
             for member in tar.getmembers():
@@ -434,12 +562,16 @@ def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder=''):
                 os.remove(tmp_path)
 
             try:
-                r = requests.get(download_url, allow_redirects=True, timeout=60)
+                try:
+                    r = requests.get(download_url, allow_redirects=True, timeout=download_timeout)
+                except Exception as req_exc:
+                    raise CatalogInstallError(CATALOG_ERR_DOWNLOAD, f"({req_exc})") from req_exc
                 status_code = getattr(r, "status_code", None)
                 if status_code is not None and int(status_code) >= 400:
-                    raise RuntimeError(f"Catalog download failed with HTTP status {status_code}")
+                    raise CatalogInstallError(CATALOG_ERR_DOWNLOAD, f"(HTTP {status_code})")
                 if not getattr(r, "content", None):
-                    raise RuntimeError("Catalog download returned empty response body")
+                    raise CatalogInstallError(CATALOG_ERR_DOWNLOAD, "(prazen odgovor)")
+                _check_catalog_payload(r.content)
 
                 with open(tmp_path, 'wb') as fileStream:
                     fileStream.write(r.content)
@@ -452,7 +584,7 @@ def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder=''):
                 raise
 
         normalized_id = _normalize_qgz_version(id)
-        if normalized_id is None:
+        if normalized_id is None and not (local_archive and id is None):
             raise RuntimeError(f"Invalid catalog id received: {id!r}")
 
         if sub_folder:
@@ -464,8 +596,11 @@ def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder=''):
         if not os.path.exists(cachedFolderPath):
             os.mkdir(cachedFolderPath)
 
-        cachedXzPath = os.path.join(cachedFolderPath, str(drzava) + '_' + normalized_id + '.tar.xz')
-        downloadedXzPath = os.path.join(cachedFolderPath, 'qnarcis.tar.xz')
+        cachedXzPath = (_catalog_cache_path(plugin_dir, cache_prefix, drzava, normalized_id, url)
+                        if normalized_id is not None else None)
+        # ločena začasna datoteka za predogled, da ne trči z namestitvijo aktivnega kataloga
+        downloadedXzPath = os.path.join(
+            cachedFolderPath, 'qnarcis' + (sub_folder or '') + '.tar.xz')
 
         import shutil
         archive_path = None
@@ -474,16 +609,29 @@ def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder=''):
         if os.path.exists(downloadedXzPath):
             os.remove(downloadedXzPath)
 
-        if os.path.exists(cachedXzPath):
+        if local_archive:
             try:
-                _validate_catalog_archive(cachedXzPath)
-                archive_path = cachedXzPath
+                _validate_catalog_archive(local_archive)
+            except Exception as invalid_exc:
+                raise CatalogInstallError(CATALOG_ERR_LOCAL_FILE, f"({invalid_exc})") from invalid_exc
+            archive_path = local_archive
+
+        for candidate in ([] if local_archive else
+                          _cached_catalog_candidates(plugin_dir, cache_prefix, drzava, normalized_id, url)):
+            if not os.path.exists(candidate):
+                continue
+            try:
+                _validate_catalog_archive(candidate)
+                archive_path = candidate
+                break
             except Exception as cache_exc:
                 QgsMessageLog.logMessage(
-                    f"Cached catalog archive invalid, re-downloading: {cache_exc}",
+                    f"Cached catalog archive '{candidate}' invalid, ignoring: {cache_exc}",
                     "QNarcIS",
                     _QGIS_WARNING,
                 )
+                if candidate != cachedXzPath:
+                    continue  # ročno skopirane datoteke ne brišemo
                 try:
                     os.remove(cachedXzPath)
                 except OSError as remove_exc:
@@ -496,42 +644,64 @@ def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder=''):
         if archive_path is None:
             _download_catalog_archive(url, downloadedXzPath)
             downloaded_this_run = True
-            _validate_catalog_archive(downloadedXzPath)
+            try:
+                _validate_catalog_archive(downloadedXzPath)
+            except Exception as invalid_exc:
+                raise CatalogInstallError(CATALOG_ERR_NOT_ARCHIVE, f"({invalid_exc})") from invalid_exc
             archive_path = downloadedXzPath
 
         if not archive_path or not os.path.exists(archive_path):
             return None
-        
-        # Clean up existing qml folder before extraction
-        extract_path = os.path.join(plugin_dir, sub_folder) if sub_folder else plugin_dir
-        qml_folder = os.path.join(extract_path, 'qml')
-        if os.path.exists(qml_folder):
-            shutil.rmtree(qml_folder)
-        
-        _extract_catalog_archive(archive_path, extract_path)
 
-        for required_item in ('vsi_sloji.xml', 'additional_layer_data.json', 'qml'):
-            if not os.path.exists(os.path.join(extract_path, required_item)):
-                raise RuntimeError(f"Catalog extraction failed: missing {required_item}")
-        
-        json_path = os.path.join(extract_path, 'additional_layer_data.json')
-        if os.path.exists(json_path):
+        # Novi katalog najprej razpakiramo in pripravimo v začasni mapi; obstoječi
+        # katalog zamenjamo šele, ko je novi v celoti pripravljen in preverjen.
+        extract_path = os.path.join(plugin_dir, sub_folder) if sub_folder else plugin_dir
+        staging_path = os.path.join(extract_path, '.catalog_staging')
+        backup_path = os.path.join(extract_path, '.catalog_backup')
+        for leftover in (staging_path, backup_path):
+            if os.path.exists(leftover):
+                shutil.rmtree(leftover)
+        os.makedirs(staging_path)
+
+        try:
+            _extract_catalog_archive(archive_path, staging_path)
+
+            for required_item in _CATALOG_ITEMS:
+                if not os.path.exists(os.path.join(staging_path, required_item)):
+                    raise RuntimeError(f"Catalog extraction failed: missing {required_item}")
+
+            extents = None
+            json_path = os.path.join(staging_path, 'additional_layer_data.json')
             with open(json_path, 'r') as f:
                 additional_data = json.load(f)
-            
             if '_extents' in additional_data:
-                extents = additional_data['_extents']
-                s = QSettings()
-                for country_code, extent in extents.items():
-                    s.setValue('q_narcis/default_extent/' + country_code, json.dumps(extent))
-                
-                del additional_data['_extents']
+                extents = additional_data.pop('_extents')
                 with open(json_path, 'w') as f:
                     json.dump(additional_data, f, indent=2)
-        
-        if not sub_folder:
+
+            ignored = sorted(set(os.listdir(staging_path)) - set(_CATALOG_ITEMS))
+            if ignored:
+                QgsMessageLog.logMessage(
+                    f"Catalog archive contains unexpected entries, ignoring: {ignored}",
+                    "QNarcIS",
+                    _QGIS_WARNING,
+                )
+
+            _swap_catalog_items(staging_path, extract_path, backup_path)
+        finally:
+            shutil.rmtree(staging_path, ignore_errors=True)
+
+        if extents and settings_prefix is not None:
             s = QSettings()
-            s.setValue('q_narcis/qgz_version', normalized_id)
+            for country_code, extent in extents.items():
+                s.setValue(settings_prefix + 'default_extent/' + country_code, json.dumps(extent))
+
+        if not sub_folder and settings_prefix is not None:
+            s = QSettings()
+            if normalized_id is None:
+                s.remove(settings_prefix + 'qgz_version')
+            else:
+                s.setValue(settings_prefix + 'qgz_version', normalized_id)
         
         if downloaded_this_run:
             os.replace(downloadedXzPath, cachedXzPath)
@@ -556,9 +726,185 @@ def installQgz(id, url, plugin_dir, drzava, callback=None, sub_folder=''):
             _QGIS_CRITICAL,
         )
         QgsMessageLog.logMessage(traceback.format_exc(), "QNarcIS", _QGIS_CRITICAL)
-        return None
+        return {
+            'error': getattr(exc, 'user_message', None),
+            'callback': callback,
+            'sub_folder': sub_folder,
+        }
 
     return {'id': normalized_id, 'callback': callback, 'sub_folder': sub_folder}
+
+# Mapa za predogled kataloga drugega profila v Nastavitvah.
+CATALOG_PREVIEW_FOLDER = '_settings_preview'
+# Predogled kataloga: časovne omejitve (s) posameznih korakov in skupna varovalka (ms).
+CATALOG_PREVIEW_INDEX_TIMEOUT = 15
+CATALOG_PREVIEW_CHECK_TIMEOUT = 10
+CATALOG_PREVIEW_DOWNLOAD_TIMEOUT = 30
+CATALOG_PREVIEW_TIMEOUT_MS = 45000
+
+
+_QNETWORKREQUEST_HTTP_STATUS_ATTRIBUTE = getattr(QNetworkRequest, 'HttpStatusCodeAttribute', None)
+if _QNETWORKREQUEST_HTTP_STATUS_ATTRIBUTE is None:
+    _QNETWORKREQUEST_HTTP_STATUS_ATTRIBUTE = QNetworkRequest.Attribute.HttpStatusCodeAttribute
+
+
+def _quick_check_catalog_url(url, timeout):
+    """
+    Hitro preverjanje povezave do arhiva z zahtevo HEAD (brez prenosa vsebine).
+    Vrne uporabniško sporočilo o napaki ali None (povezava je videti v redu ali
+    strežnik HEAD ne podpira – takrat odloči prenos).
+    """
+    request = QNetworkRequest(QUrl(url))
+    if hasattr(request, 'setTransferTimeout'):
+        request.setTransferTimeout(int(timeout * 1000))
+    blocking = QgsBlockingNetworkRequest()
+    error = blocking.head(request)
+    reply = blocking.reply()
+    status = None
+    try:
+        status = reply.attribute(_QNETWORKREQUEST_HTTP_STATUS_ATTRIBUTE)
+        status = int(status) if status is not None else None
+    except Exception:
+        status = None
+    content_type = ''
+    try:
+        content_type = bytes(reply.rawHeader(b'Content-Type')).decode('latin-1').lower()
+    except Exception:
+        content_type = ''
+    QgsMessageLog.logMessage(
+        f"Catalog preview: HEAD {url} -> error={error!r}, HTTP {status}, type={content_type!r}",
+        "QNarcIS", _QGIS_INFO)
+    if status in (405, 501):  # HEAD ni podprt
+        return None
+    if 'html' in content_type:
+        return CATALOG_ERR_HTML
+    if status is not None and status >= 400:
+        return CATALOG_ERR_DOWNLOAD
+    if error != _QGS_NETWORK_NO_ERROR and status is None:
+        return CATALOG_ERR_DOWNLOAD
+    return None
+
+
+def prepareCatalogPreview(index_url, catalog_code, plugin_dir, cache_prefix):
+    """
+    V ozadju (QgsTask): prebere indeks katalogov izbranega profila in razpakira
+    njegov katalog v CATALOG_PREVIEW_FOLDER. Nastavitev in aktivnega kataloga ne
+    spreminja. Vrne {'status': 'ok'|'index_error'|'not_in_index'|'install_error', ...}.
+    """
+    try:
+        return _prepare_catalog_preview(index_url, catalog_code, plugin_dir, cache_prefix)
+    except Exception as exc:
+        QgsMessageLog.logMessage("Catalog preview failed:\n" + traceback.format_exc(), "QNarcIS", _QGIS_CRITICAL)
+        return {'status': 'error', 'detail': str(exc)}
+
+
+def _preview_logger(started):
+    def log(message, level=_QGIS_INFO):
+        QgsMessageLog.logMessage(f"Catalog preview [{time.monotonic() - started:.1f} s]: {message}",
+                                 "QNarcIS", level)
+    return log
+
+
+def _read_catalog_index(index_url, catalog_code, log, timeout=CATALOG_PREVIEW_INDEX_TIMEOUT):
+    """
+    Najnovejši zapis kataloga catalog_code v indeksu. Vrne (status, id, url):
+    ('ok', id, url) | ('index_error', None, None) | ('not_in_index', None, None).
+    URL je pretvorjen tako kot pri nameščanju ob zagonu (.qgz -> .tar.xz).
+    """
+    log(f"reading index {index_url} for {catalog_code}.")
+    data_json = None
+    try:
+        response = requests.get(index_url, timeout=timeout)
+        if response.ok:
+            data_json = response.json()
+        else:
+            log(f"index returned {response.reason or response.status_code}.", _QGIS_WARNING)
+    except Exception as exc:
+        log(f"index unreadable: {exc}", _QGIS_WARNING)
+    if not isinstance(data_json, dict) or not isinstance(data_json.get('items'), list):
+        return 'index_error', None, None
+    log("index read.")
+
+    items = [obj for obj in data_json['items']
+             if isinstance(obj, dict) and obj.get('drzava') == catalog_code
+             and _normalize_qgz_version(obj.get('id')) is not None and obj.get('povezava')]
+    if not items:
+        return 'not_in_index', None, None
+    item = max(items, key=lambda d: int(_normalize_qgz_version(d['id'])))
+
+    url = str(item['povezava']).strip()
+    if url.lower().endswith('.qgz'):
+        url = url[:-4] + '.tar.xz'
+    return 'ok', _normalize_qgz_version(item['id']), url
+
+
+def _prepare_catalog_preview(index_url, catalog_code, plugin_dir, cache_prefix):
+    log = _preview_logger(time.monotonic())
+    status, normalized_id, url = _read_catalog_index(index_url, catalog_code, log)
+    if status != 'ok':
+        return {'status': status}
+    if not any(os.path.exists(path) for path in
+               _cached_catalog_candidates(plugin_dir, cache_prefix, catalog_code, normalized_id, url)):
+        log(f"checking {url}.")
+        problem = _quick_check_catalog_url(url, CATALOG_PREVIEW_CHECK_TIMEOUT)
+        if problem:
+            log(f"archive link not usable: {problem}", _QGIS_WARNING)
+            return {'status': 'install_error', 'detail': problem}
+    log(f"preparing catalog {normalized_id} from {url}.")
+    result = installQgz(normalized_id, url, plugin_dir, catalog_code, None,
+                        CATALOG_PREVIEW_FOLDER, None, cache_prefix,
+                        CATALOG_PREVIEW_DOWNLOAD_TIMEOUT)
+    log(f"done: {result!r}")
+    if not result or 'error' in result:
+        return {'status': 'install_error', 'detail': (result or {}).get('error')}
+    return {'status': 'ok', 'id': result['id']}
+
+
+# Uvoz kataloga iz datoteke: indeks se bere le za številko kataloga, zato krajša omejitev.
+CATALOG_LOCAL_INDEX_TIMEOUT = 8
+
+
+def prepareLocalCatalogPreview(archive_path, index_url, catalog_code, plugin_dir, cache_prefix):
+    """
+    V ozadju (QgsTask): razpakira izbrani lokalni arhiv v CATALOG_PREVIEW_FOLDER.
+    Iz indeksa (če je dosegljiv) prebere številko in povezavo kataloga, da se
+    arhiv ob potrditvi shrani v _cached_qgz pod imenom, ki ga uporabi nameščanje
+    ob zagonu. Nastavitev in nameščenega kataloga ne spreminja.
+    Vrne {'status': 'ok', 'id': id|None, 'url': url|None, 'index_status': ...}
+    ali {'status': 'install_error'|'error', 'detail': ...}.
+    """
+    try:
+        log = _preview_logger(time.monotonic())
+        index_status, normalized_id, url = 'index_error', None, None
+        if index_url:
+            index_status, normalized_id, url = _read_catalog_index(
+                index_url, catalog_code, log, CATALOG_LOCAL_INDEX_TIMEOUT)
+        log(f"preparing local catalog {archive_path} (index: {index_status}, id {normalized_id}).")
+        result = installQgz(normalized_id, url or '', plugin_dir, catalog_code, None,
+                            CATALOG_PREVIEW_FOLDER, None, cache_prefix, local_archive=archive_path)
+        log(f"done: {result!r}")
+        if not result or 'error' in result:
+            return {'status': 'install_error',
+                    'detail': (result or {}).get('error') or CATALOG_ERR_LOCAL_FILE}
+        return {'status': 'ok', 'id': normalized_id, 'url': url, 'index_status': index_status}
+    except Exception as exc:
+        QgsMessageLog.logMessage("Local catalog preview failed:\n" + traceback.format_exc(),
+                                 "QNarcIS", _QGIS_CRITICAL)
+        return {'status': 'error', 'detail': str(exc)}
+
+
+def storeLocalCatalogInCache(archive_path, plugin_dir, catalog_code, normalized_id, url, cache_prefix):
+    """Kopira lokalni arhiv v _cached_qgz pod imenom, ki ga poišče installQgz."""
+    import shutil
+    target = _catalog_cache_path(plugin_dir, cache_prefix, catalog_code, normalized_id, url)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    if os.path.abspath(archive_path) == os.path.abspath(target):
+        return target
+    tmp_path = target + '.tmp'
+    shutil.copyfile(archive_path, tmp_path)
+    os.replace(tmp_path, target)
+    return target
+
 
 def urlFetchSync(url):
     request = QgsBlockingNetworkRequest()
@@ -624,10 +970,14 @@ class QNarcisTask( QgsTask ):
 
 
 class QNarcisSortFilterProxyModel(QSortFilterProxyModel):
+    # Iskanje po imenu ali po vseh poljih + označevanje zadetkov
+    HIGHLIGHT_COLOR = QColor(255, 236, 140)
+
     def __init__(self,):
         super().__init__()
         self.view = None
         self.filterString = ''
+        self.searchAllFields = False
 
     def setFilterString(self, text):
         text = str(text)
@@ -636,29 +986,56 @@ class QNarcisSortFilterProxyModel(QSortFilterProxyModel):
         self.invalidateFilter()
         self.view.expandAll()
 
+    def setSearchAllFields(self, enabled):
+        self.searchAllFields = bool(enabled)
+        self.invalidateFilter()
+        if self.view is not None:
+            self.view.expandAll()
+
     def setView(self, view):
         self.view = view
+
+    def _row_search_texts(self, model, source_row, source_parent):
+        name_index = model.index(source_row, self.filterKeyColumn(), source_parent)
+        texts = [model.data(name_index) or '']
+        if self.searchAllFields:
+            for col in range(model.columnCount(source_parent)):
+                if col == self.filterKeyColumn():
+                    continue
+                idx = model.index(source_row, col, source_parent)
+                texts.append(model.data(idx) or '')
+                # npr. URL metapodatkov v stolpcu »Metapodatki«
+                texts.append(str(model.data(idx, _QT_USER_ROLE + 1) or ''))
+            # skrita polja (GeoServer typename ...)
+            texts.append(str(model.data(name_index, _QT_USER_ROLE + 2) or ''))
+        return texts
 
     def filterAcceptsRow (self, source_row, source_parent):
         if not self.filterString:
             return True
         
         model = self.sourceModel()
-        source_index = model.index(source_row, self.filterKeyColumn(), source_parent)
-        data = model.data(source_index)
 
-        if self.filterString in data.lower():
-            return True
-        else:
-            # Check if any ancestor item matches the filter criteria
-            parent_index = source_parent
-            while parent_index.isValid():
-                parent_data = model.data(parent_index)
-                if self.filterString in parent_data.lower():
-                    return True
-                parent_index = parent_index.parent()
+        for text in self._row_search_texts(model, source_row, source_parent):
+            if self.filterString in str(text).lower():
+                return True
+
+        # Check if any ancestor item matches the filter criteria
+        parent_index = source_parent
+        while parent_index.isValid():
+            parent_data = model.data(parent_index) or ''
+            if self.filterString in parent_data.lower():
+                return True
+            parent_index = parent_index.parent()
 
         return False
+
+    def data(self, index, role=_QT_DISPLAY_ROLE):
+        if role == _QT_BACKGROUND_ROLE and self.searchAllFields and self.filterString:
+            text = super().data(index, _QT_DISPLAY_ROLE)
+            if text and self.filterString in str(text).lower():
+                return self.HIGHLIGHT_COLOR
+        return super().data(index, role)
 
 class TableModel(QAbstractTableModel):
     def __init__(self, data, header):
@@ -706,7 +1083,8 @@ class QNarcis:
         # Save reference to the QGIS interface
         self.iface = iface
 
-        self.country_code = 'SI'
+        # koda kataloga aktivnega profila (polje »drzava« v indeksu katalogov)
+        self.catalog_code = 'SI'
 
         self.default_layer_name = 'Pregledna topografska karta'
 
@@ -778,14 +1156,19 @@ class QNarcis:
         s = QgsSettings()
         plugin_version = s.value('q_narcis/plugin_version', None)
 
-        self.country_code = s.value('q_narcis/country_code', 'SI')
+        # Profil infrastrukture (glej country_profile.py). Izbrana država iz
+        # izdanih različic se ob prvem zagonu preslika na vgrajeni profil.
+        cprof.migrate_legacy_profile_selection(s)
+        self.profile, self.profile_warning = cprof.load_active(s)
+        self.profile_id = self.profile.id
+        self.catalog_code = self.profile.catalog_code or ''
 
-        self.default_layer_name = s.value('q_narcis/default_layer_name', 'Pregledna topografska karta' if self.country_code == 'SI' else 'OpenStreetMap')
-        self.default_layer_names = self._normalize_layer_name_list(self._read_layer_name_list_setting(s, 'q_narcis/default_layer_names'))
+        self.default_layer_name = s.value(self._pkey('default_layer_name'), self._profile_default_layer_name())
+        self.default_layer_names = self._normalize_layer_name_list(self._read_layer_name_list_setting(s, self._pkey('default_layer_names')))
         if not self.default_layer_names and self.default_layer_name:
             self.default_layer_names = [self.default_layer_name]
         legacy_startup_enabled = bool(self.default_layer_name or self.default_layer_names)
-        self.default_layer_enabled = self._read_bool_setting(s, 'q_narcis/default_layer_enabled', legacy_startup_enabled)
+        self.default_layer_enabled = self._read_bool_setting(s, self._pkey('default_layer_enabled'), legacy_startup_enabled)
 
         config = configparser.ConfigParser()
         config.read(os.path.join(self.plugin_dir,'metadata.txt'))
@@ -798,10 +1181,12 @@ class QNarcis:
                 layerDataExists = False
 
         if not plugin_version or plugin_version != plugin_version_metadata or not layerDataExists:
-            s.remove('q_narcis/qgz_version')
+            s.remove(self._pkey('qgz_version'))
             s.setValue('q_narcis/plugin_version', plugin_version_metadata)
 
-        if self.country_code == 'SI':
+        self._handle_profile_switch(s)
+
+        if self.profile.enabled('news'):
             self.iface.projectRead.connect(self.runNews)
             self.iface.newProjectCreated.connect(self.runNews)
 
@@ -815,6 +1200,100 @@ class QNarcis:
         self.login_status_label = QLabel()
         self.login_status_label_tax = QLabel()
         self.lock_icon = QIcon(':/plugins/q_narcis/icons/lock-closed-svgrepo-com.svg')
+
+    # ---- profil infrastrukture -------------------------------------------
+    def _pkey(self, name):
+        """Ključ QgsSettings, vezan na aktivni profil."""
+        return cprof.profile_settings_key(getattr(self, 'profile_id', None), name)
+
+    def _profile_default_layer_name(self):
+        """Prva privzeta podlaga profila (SI: topografska karta, MK/XK: OpenStreetMap)."""
+        groups = self.profile.default_layers() if self.profile is not None else []
+        return groups[0][0] if groups else ''
+
+    def _handle_profile_switch(self, s):
+        """
+        Ob menjavi profila (zaznano ob zagonu) odstrani poverilnice prejšnje
+        infrastrukture in vsili ponovno namestitev kataloga.
+        """
+        last = s.value(cprof.SETTINGS_LAST_PROFILE, None)
+        if last is None:
+            s.setValue(cprof.SETTINGS_LAST_PROFILE, self.profile_id)
+            return
+        if str(last) == self.profile_id:
+            return
+        try:
+            am = QgsApplication.authManager()
+            if 'qnarcis_oauth' in am.availableAuthMethodConfigs().keys():
+                am.removeAuthenticationConfig('qnarcis_oauth')
+        except Exception:
+            QgsMessageLog.logMessage("Could not remove qnarcis_oauth after profile switch.", "QNarcIS", _QGIS_WARNING)
+        s.remove(self._pkey('qgz_version'))
+        s.setValue(cprof.SETTINGS_LAST_PROFILE, self.profile_id)
+        QgsMessageLog.logMessage(f"Profile switched from {last} to {self.profile_id}.", "QNarcIS", _QGIS_INFO)
+
+    def _branding(self, key, default=None):
+        value = self.profile.get('branding.' + key) if self.profile is not None else None
+        return value if value else default
+
+    def _portal_name(self):
+        return self._branding('portal_name') or (self.profile.name if self.profile is not None else 'NarcIS')
+
+    def _portal_url(self):
+        return self._branding('portal_url') or (self.profile.get('base_url') if self.profile is not None else None)
+
+    def _login_host(self):
+        url = self.profile.service('login').url() if self.profile is not None else None
+        return cprof.url_host(url) if url else None
+
+    def _credentials_dialog(self):
+        if self.profile is None or self.profile.is_builtin:
+            return CustomCredentialsDialog()
+        return CustomCredentialsDialog(
+            portal_name=self._portal_name(),
+            portal_url=self._branding('login_portal_url') or self._portal_url() or '',
+            login_host=self._login_host(),
+        )
+
+    def _profile_logo_path(self):
+        """Pot (ali https URL) logotipa iz profila; None = vgrajen NarcIS logotip."""
+        logo = self._branding('logo')
+        if not logo or not isinstance(logo, str):
+            return None
+        if logo.lower().startswith('https://'):
+            return logo
+        try:
+            import base64
+            import hashlib
+            header, data = logo.split(',', 1)
+            ext = '.svg' if 'svg' in header else '.png'
+            raw = base64.b64decode(data)
+            folder = os.path.join(QgsApplication.qgisSettingsDirPath(), 'qnarcis')
+            os.makedirs(folder, exist_ok=True)
+            path = os.path.join(folder, 'logo_' + hashlib.sha256(raw).hexdigest()[:12] + ext)
+            if not os.path.exists(path):
+                with open(path, 'wb') as f:
+                    f.write(raw)
+            return path
+        except Exception:
+            QgsMessageLog.logMessage("Profile logo could not be decoded.", "QNarcIS", _QGIS_WARNING)
+            return None
+
+    def _help_lang(self):
+        """
+        Mapa lokalne pomoči v docs/: »si« za slovenščino, docs/<jezik>, če obstaja
+        (npr. docs/mk), sicer angleška pomoč.
+        """
+        language = self.profile.language if self.profile is not None else None
+        if language is None:
+            return "si" if self.catalog_code == "SI" else "en"
+        language = language.strip().lower()
+        if language == 'sl':
+            return "si"
+        if re.fullmatch(r'[a-z]{2,3}(-[a-z0-9]{2,8})?', language) and os.path.exists(
+                os.path.join(self.plugin_dir, 'docs', language, 'index.html')):
+            return language
+        return "en"
 
     def hasDataModel(self):
         return hasattr(self, 'tree') and hasattr(self.tree, 'data_model')
@@ -831,9 +1310,9 @@ class QNarcis:
             self.queue = self.onProjectRead
 
     def onProjectCreated(self):
-        if not self.country_code == 'SI':
+        if self.catalog_code and self.catalog_code != 'SI':
                 s = QSettings()
-                extent = s.value('q_narcis/default_extent/' + self.country_code, None)
+                extent = s.value(self._pkey('default_extent/' + self.catalog_code), None)
                 if extent:
                     extent = json.loads(extent)
                     crs = QgsCoordinateReferenceSystem(extent['crs_code'])
@@ -1137,9 +1616,9 @@ class QNarcis:
                         level=_QGIS_WARNING,
                         duration=8
                     )
-                if not self.country_code == 'SI':
+                if self.catalog_code and self.catalog_code != 'SI':
                     s = QSettings()
-                    extent = s.value('q_narcis/default_extent/' + self.country_code, None)
+                    extent = s.value(self._pkey('default_extent/' + self.catalog_code), None)
                     if extent:
                         extent = json.loads(extent)
                         rect = QgsRectangle(extent['xmin'],extent['ymin'],extent['xmax'],extent['ymax'])
@@ -1161,15 +1640,37 @@ class QNarcis:
         :rtype: QString
         """
 
-        if self.country_code == 'SI':
+        profile = getattr(self, 'profile', None)
+        language = profile.language if profile is not None else None
+
+        if profile is not None:
+            effective = language or ('sl' if self.catalog_code == 'SI' else 'en')
+            translated = profile.translate(message, effective)
+            if translated is not None:
+                return translated
+
+        if language is None:
+            # dosedanje vedenje: SI slovensko, ostale države po kodi kataloga ali angleško
+            if self.catalog_code == 'SI':
+                return message
+
+            if message in self.translations:
+                if self.catalog_code in self.translations[message]:
+                    return self.translations[message][self.catalog_code]
+                elif 'en' in self.translations[message]:
+                    return self.translations[message]['en']
+
             return message
 
-        if message in self.translations:
-            if self.country_code in self.translations[message]:
-                return self.translations[message][self.country_code]
-            elif 'en' in self.translations[message]:
-                return self.translations[message]['en']
+        if language == 'sl':
+            return message
 
+        entry = self.translations.get(message)
+        if entry:
+            if language in entry:
+                return entry[language]
+            if 'en' in entry:
+                return entry['en']
         return message
 
         # noinspection PyTypeChecker,PyArgumentList,PyCallByClass
@@ -1250,6 +1751,9 @@ class QNarcis:
         return action
     
     def apiLogin(self, skip_if_not_logged = False):
+        login_service = self.profile.service('login')
+        if not login_service.enabled:
+            return
         am = QgsApplication.authManager()
         uname = None
         pwd = None
@@ -1270,7 +1774,7 @@ class QNarcis:
             return
         else:
             # 2. Prompt for credentials
-            dialog = CustomCredentialsDialog()
+            dialog = self._credentials_dialog()
             if _exec_dialog(dialog) == _QDIALOG_ACCEPTED:
                 uname, pwd = dialog.get_credentials()
                 uname = uname.strip()
@@ -1284,8 +1788,10 @@ class QNarcis:
             return
         # 3. Attempt login (regardless of source: config or dialog)
         
-        url = "https://narcis.gov.si/ords/narcis/qnarcis-protected/get-user/"
-        headers = {"uporabnik": uname, "key": pwd}
+        url = login_service.url()
+        headers = {login_service.field('user'): uname, login_service.field('password'): pwd}
+        resp_key = login_service.field('gsrv_key')
+        no_access_value = login_service.get('no_access_value', 'n/a')
 
         try:
             r = requests.get(url, headers=headers, timeout=10)
@@ -1295,15 +1801,15 @@ class QNarcis:
                 except Exception:
                     resp_json = {}
 
-                if "kljuc" in resp_json:
+                if resp_key in resp_json:
                     if cfg is None:
                         self.addConfig(uname, pwd)
 
-                    gsrv_user_name = resp_json['uporabnik']
+                    gsrv_user_name = resp_json[login_service.field('gsrv_user')]
                     
-                    if gsrv_user_name != 'n/a':
+                    if gsrv_user_name != no_access_value:
                         self.geoserver_credentials = {
-                            "key": resp_json['kljuc'],
+                            "key": resp_json[resp_key],
                             "user": gsrv_user_name,
                             "qnarcis_user": uname
                         }
@@ -1346,9 +1852,15 @@ class QNarcis:
         self.toolButtonMenu = QMenu(self.toolButton)
         self.toolButton.setMenu(self.toolButtonMenu)
 
-        actionMenuFirst = QAction(icon, self.tr(u'Pojdi na spletni portal NarcIS'), self.iface.mainWindow())
-        actionMenuFirst.triggered.connect(self.narcis_login)
-        self.toolButtonMenu.addAction(actionMenuFirst)
+        actionMenuFirst = None
+        if self._portal_url():
+            if self.profile is None or self.profile.is_builtin:
+                portal_text = self.tr(u'Pojdi na spletni portal NarcIS')
+            else:
+                portal_text = self.tr(u'Pojdi na spletni portal') + ' ' + self._portal_name()
+            actionMenuFirst = QAction(icon, portal_text, self.iface.mainWindow())
+            actionMenuFirst.triggered.connect(self.narcis_login)
+            self.toolButtonMenu.addAction(actionMenuFirst)
 
         actionMenuSecond = QAction(QIcon(':/plugins/q_narcis/icons/user-key-svgrepo-com.svg',), self.tr(u'Prijava v zaščitene funkcije'), self.iface.mainWindow())
         actionMenuSecond.triggered.connect(self.apiLogin)
@@ -1360,11 +1872,12 @@ class QNarcis:
 
         self.toolButtonMenu.addSeparator()
 
-        self.toolButton.setDefaultAction(actionMenuFirst)
+        self.toolButton.setDefaultAction(actionMenuFirst or actionMenuSecond)
 
         self.toolbar.addWidget(self.toolButton)
 
-        self.iface.addPluginToMenu(self.menu, actionMenuFirst)
+        if actionMenuFirst is not None:
+            self.iface.addPluginToMenu(self.menu, actionMenuFirst)
         self.iface.addPluginToMenu(self.menu, actionMenuSecond)
         self.iface.addPluginToMenu(self.menu, actionMenuThird)
         
@@ -1373,14 +1886,15 @@ class QNarcis:
         self.iface.addPluginToMenu(self.menu, separator)
 
         self.actions.append(separator)
-        self.actions.append(actionMenuFirst)
+        if actionMenuFirst is not None:
+            self.actions.append(actionMenuFirst)
         self.actions.append(actionMenuSecond)
         self.actions.append(actionMenuThird)
 
     def initGui(self):
         """Create the menu entries and toolbar icons inside the QGIS GUI."""
         
-        if self.country_code == 'SI':
+        if self.profile.enabled('login'):
             self.addButtonLoginMenu()
         
         self.action_izbirnik_slojev = self.add_action(
@@ -1391,13 +1905,14 @@ class QNarcis:
             parent=self.iface.mainWindow())
     
         self.action_send_polygon = None
-        if self.country_code == 'SI':
+        if self.profile.enabled('send_layer'):
             self.action_send_polygon = self.add_action(
                 ':/plugins/q_narcis/icons/poslji_poligon.svg',
                 text=self.tr(u'Pošlji sloj'),
                 callback=self.runQuery,
                 parent=self.iface.mainWindow())
             
+        if self._iskalnik_enabled():
             self.action_send_polygon = self.add_action(
                 ':/plugins/q_narcis/icons/iskanje.svg',
                 text=self.tr(u'Iskalnik'),
@@ -1411,18 +1926,29 @@ class QNarcis:
             enabled_flag=False,
             parent=self.iface.mainWindow())
     
-        if self.country_code == 'SI':
+        if self.profile.enabled('news'):
             self.add_action(
                 ':/plugins/q_narcis/icons/newspaper-solid.svg',
                 text=self.tr(u'Obvestila'),
                 callback=self.runNews,
                 parent=self.iface.mainWindow())
         
-        self.add_action(
-            ':/plugins/q_narcis/icons/question-mark.png',
-            text=self.tr(u'Pomoč'),
-            callback=self.runHelp,
-            parent=self.iface.mainWindow())
+        if self.profile.enabled('map_template'):
+            self.add_action(
+                QgsApplication.iconPath('mActionNewLayout.svg'),
+                text=self.tr(u'NarcIS karta'),
+                callback=self.runMapTemplate,
+                parent=self.iface.mainWindow())
+
+        if self.profile.enabled('help'):
+            self.add_action(
+                ':/plugins/q_narcis/icons/question-mark.png',
+                text=self.tr(u'Pomoč'),
+                callback=self.runHelp,
+                parent=self.iface.mainWindow())
+
+        if self.profile_warning:
+            self.iface.messageBar().pushMessage("QNarcIS", self.profile_warning, level=_QGIS_WARNING)
 
     #--------------------------------------------------------------------------
 
@@ -1602,7 +2128,9 @@ class QNarcis:
         index = self.proxy_model2.index(row, 0, parent)
         value = self.proxy_model2.data(index, _QT_DISPLAY_ROLE)
         
-        QDesktopServices.openUrl(QUrl('https://narcis.gov.si/ords/r/narcis/narcis/test-qgis?p62_obmocje_id='+str(int(value))))
+        result_url = self.profile.service('send_polygon').get('result_url')
+        if result_url:
+            QDesktopServices.openUrl(QUrl(result_url.replace('{area_id}', str(int(value)))))
 
     def onTreeClicked(self, val):
         row = val.row()
@@ -1615,6 +2143,8 @@ class QNarcis:
         self.handleTreeItemClick(value, qgzLayerId, index, self.tree.proxy_model)
 
     def get_geoserver_credentials(self):
+        if not self.profile.enabled('login'):
+            return None
         auth_id, config_name, user_name = findGeoserverAuthConfig()
         if not auth_id:
             # No config: prompt user, and store to config if successful
@@ -1830,6 +2360,75 @@ class QNarcis:
         font.setWeight(black_weight) #QFont.ExtraBold
         model.setData(modelIndex, font, _QT_FONT_ROLE)
 
+    # ---- NarcIS karta (predloga za tisk) ----------------------------------
+    def _catalog_definition_for_project_layer(self, layer):
+        """Poišče zapis iz kataloga za sloj v projektu (ali None)."""
+        root = QgsProject.instance().layerTreeRoot()
+        raw_name = layer.name()
+        layer_name = self._normalize_identity_layer_name(raw_name)
+
+        ancestor_names = []
+        tree_layer = root.findLayer(layer.id())
+        if tree_layer is not None:
+            ancestors = []
+            self.getLayerAncestorNames(tree_layer, ancestors)
+            if ancestors:
+                ancestors.pop()  # koren
+            ancestor_names = [a.name() for a in ancestors]
+
+        definition = self._resolve_catalog_layer_definition_for_project_layer(
+            layer, layer_name, ancestor_names,
+            prefer_locked='🔒' in str(raw_name or ''))
+        if definition:
+            return definition
+
+        # rezerva: samo po imenu (npr. če je uporabnik premaknil sloj v drugo skupino)
+        if layer_name in self.layers:
+            return self.layers[layer_name]
+        if self.locked_layers.get(layer_name):
+            return self.locked_layers[layer_name][0]
+        return None
+
+    def runMapTemplate(self):
+        if not (self.hasDataModel() or self.run(True)):
+            self.iface.messageBar().pushMessage(
+                "QNarcIS", self.tr("Katalog slojev še ni naložen."), level=_QGIS_WARNING)
+            return
+
+        map_settings = snapshot_canvas_settings(self.iface.mapCanvas())
+        layers = map_settings.layers()
+        if not layers:
+            self.iface.messageBar().pushMessage(
+                "QNarcIS", self.tr("V projektu ni vidnih slojev."), level=_QGIS_WARNING)
+            return
+
+        sources = {}
+        for layer in layers:
+            display_name = self._normalize_identity_layer_name(layer.name())
+            definition = self._catalog_definition_for_project_layer(layer)
+            additional = (definition or {}).get('additionalData') or {}
+            owner = (additional.get('owner') or additional.get('organization') or '').strip()
+            if definition is None:
+                owner = None  # sloj ni iz kataloga
+            elif not owner:
+                owner = self.tr('skrbnik ni naveden')
+            sources.setdefault(owner, []).append(display_name)
+
+        try:
+            footer_text = self._branding('map_footer')
+            if not footer_text and self.profile is not None and not self.profile.is_builtin:
+                footer_text = self.tr("Karta izdelana z vtičnikom QNarcIS")
+                if self._portal_url():
+                    footer_text += f" ({self._portal_url()})"
+            create_narcis_layout(self.iface, self.plugin_dir, layers, sources,
+                                 tr=self.tr,
+                                 logo_path=self._profile_logo_path(), footer_text=footer_text,
+                                 map_settings=map_settings)
+        except Exception as e:
+            QgsMessageLog.logMessage(traceback.format_exc(), "QNarcIS", _QGIS_CRITICAL)
+            self.iface.messageBar().pushMessage(
+                "QNarcIS", self.tr("Napaka pri ustvarjanju karte") + f": {e}", level=_QGIS_CRITICAL)
+
     def addGeoserverConfig(self, user, key):
         am = QgsApplication.authManager()
         config_name = f'narcis_gsrv_{user}'
@@ -1905,6 +2504,8 @@ class QNarcis:
 
                 append_row = True
 
+                skip_layer = False
+
                 if child.tag == 'layer-tree-layer':
                     
                     lid = child.get('id')
@@ -1912,6 +2513,11 @@ class QNarcis:
                     nodeNameItem.setData(lid, _QT_USER_ROLE +1)
 
                     providerKey = child.get('providerKey')
+                    # skrito polje za iskanje »Vsa polja« (tehnično ime sloja)
+                    try:
+                        nodeNameItem.setData(extract_typename(child.get('source') or '', providerKey or '') or '', _QT_USER_ROLE + 2)
+                    except Exception as exc:
+                        QgsMessageLog.logMessage(f"Typename for search not available: {exc}", "QNarcIS", _QGIS_INFO)
                     layerItemData = {
                         'source': child.get('source'),
                         'providerKey': providerKey,
@@ -1926,7 +2532,16 @@ class QNarcis:
                         
                         locked = additionalData['locked'] if 'locked' in additionalData else False
 
-                        if locked and 'authcfg' in layerItemData['source']:
+                        if locked and 'authcfg' in layerItemData['source'] and not self.profile.enabled('login'):
+                            # Profil nima prijave: zaščitenega sloja ni mogoče uporabiti,
+                            # zato ga ne prikažemo in nikoli ne sprožimo prijave.
+                            QgsMessageLog.logMessage(
+                                f"Locked layer hidden (profile has no login service): {nodeName}",
+                                "QNarcIS", _QGIS_INFO)
+                            layerItemData['locked'] = True
+                            skip_layer = True
+                            append_row = False
+                        elif locked and 'authcfg' in layerItemData['source']:
                             if not sub_folder:
                                 self.locked_layers.setdefault(nodeName, [])
                                 self.locked_layers_by_id[lid] = layerItemData
@@ -1947,12 +2562,13 @@ class QNarcis:
                         urlItemDescription = additionalData['description'] if 'description' in additionalData else ''
                         stanjeItemText = additionalData['stanje'] if 'stanje' in additionalData else ''
 
-                    getAncestors(xml, layerItemData)
-                    if not sub_folder:
-                        self._register_catalog_layer_identity(layerItemData)
+                    if not skip_layer:
+                        getAncestors(xml, layerItemData)
+                        if not sub_folder:
+                            self._register_catalog_layer_identity(layerItemData)
 
-                    if not sub_folder and not layerItemData.get('locked'):
-                        self.layers[nodeName] = layerItemData
+                        if not sub_folder and not layerItemData.get('locked'):
+                            self.layers[nodeName] = layerItemData
 
                 providerKeyItem = QStandardItem(providerKey)
                 organizationItem = QStandardItem(organizationItemText)
@@ -2018,8 +2634,13 @@ class QNarcis:
             parent.appendRow(items)
             seen[unique_id] = parent.child(parent.rowCount() - 1)
     #----------------------------------------
+    def _iskalnik_enabled(self):
+        return any(self.profile.enabled(name) for name in ('taxa_search', 'parcels', 'parcel_ownership'))
+
     def narcis_login(self):
-        QDesktopServices.openUrl(QUrl("https://narcis.gov.si/ords/r/narcis/narcis"))
+        url = self._portal_url()
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
 
     def removeMessageWidget(self, msgWidget):
         if msgWidget in self.iface.messageBar().items():
@@ -2031,7 +2652,18 @@ class QNarcis:
 
     def onFinishedInstallingQgz(self, task):
         self.task = None
-        if hasattr(task, 'taskFunResult') and task.taskFunResult:
+        result = getattr(task, 'taskFunResult', None)
+        if result and 'error' in result:
+            message = self.tr("Napaka pri nameščanju kataloga slojev")
+            if result['error']:
+                message += ": " + self.tr(result['error'])
+            if self._catalog_files_exist(result.get('sub_folder') or ''):
+                message += " " + self.tr("Obstoječi katalog slojev ostaja v uporabi.")
+                level = _QGIS_WARNING
+            else:
+                level = _QGIS_CRITICAL
+            self.iface.messageBar().pushMessage(self.tr("Nameščanje kataloga slojev"), message, level=level)
+        elif result:
             
             if not task.taskFunResult['sub_folder']:
                 self.qgz_version = task.taskFunResult['id']
@@ -2048,27 +2680,42 @@ class QNarcis:
             self.queue()
             self.queue = None
 
-    def checkForQgzVersion(self, country_code = None, callback = None, sub_folder = ''):
-        self._countries = ['SI']
-        
-        qgz_check_url = QgsSettings().value('q_narcis/qgz_check_url', 'https://narcis.gov.si/ords/narcis/hr/qgz')
+    def _install_profile_args(self):
+        """Dodatni argumenti za installQgz: predpona nastavitev in predpomnilnika profila."""
+        return [self._pkey(''), self.profile_id + '__']
+
+    def _catalog_index_url(self):
+        url = self.profile.service('catalog').url('index_url')
+        if self.profile.is_builtin:
+            # obstoječa skrita nastavitev za ARSO (testiranje)
+            return QgsSettings().value('q_narcis/qgz_check_url', url)
+        return url
+
+    def checkForQgzVersion(self, catalog_code = None, callback = None, sub_folder = ''):
+        if not self.profile.enabled('catalog'):
+            return None
+        qgz_check_url = self._catalog_index_url()
+        if not qgz_check_url:
+            return None
         data_json = urlFetchSync(qgz_check_url)
         
         if not data_json:
             return None
         
-        country_code = country_code or self.country_code
-
-        self._countries = list(set(obj['drzava'] for obj in data_json['items']))
-        
-        items = [obj for obj in data_json['items'] if obj['drzava'] == country_code]
+        # Iz indeksa se izbere zapis s kodo kataloga profila; brez samodejnega
+        # preklopa na drug katalog (npr. SI), če ga indeks ne vsebuje.
+        catalog_code = catalog_code or self.catalog_code
+        items = [obj for obj in data_json.get('items', []) if obj.get('drzava') == catalog_code]
         
         items = sorted(items, key=lambda d: d['id'], reverse=True)
+
+        if not items:
+            return []
 
         items[0]['callback'] = callback
         items[0]['sub_folder'] = sub_folder
         
-        return items[0] if items else []
+        return items[0]
 
     def onFinishedCheckForQgzVersion(self, task):
         def _finish_check_without_install():
@@ -2079,7 +2726,7 @@ class QNarcis:
                 self.queue = None
 
         s = QgsSettings()
-        clientVersionIdRaw = s.value('q_narcis/qgz_version', None)
+        clientVersionIdRaw = s.value(self._pkey('qgz_version'), None)
         clientVersionId = _normalize_qgz_version(clientVersionIdRaw)
         if clientVersionIdRaw is not None and clientVersionId is None:
             QgsMessageLog.logMessage(
@@ -2087,14 +2734,27 @@ class QNarcis:
                 "QNarcIS",
                 _QGIS_WARNING,
             )
-            s.remove('q_narcis/qgz_version')
+            s.remove(self._pkey('qgz_version'))
+
+        if not self.profile.enabled('catalog'):
+            _finish_check_without_install()
+            return
 
         if not hasattr(task, 'taskFunResult') or task.taskFunResult == None:
-            self.iface.messageBar().pushMessage(self.tr("Povezovanje na NarcIS strežnik"), self.tr("Napaka pri povezavi na https://narcis.gov.si/ords/narcis/hr/qgz"), level=_QGIS_WARNING)
+            index_url = self._catalog_index_url()
+            if index_url == 'https://narcis.gov.si/ords/narcis/hr/qgz':
+                error_text = self.tr("Napaka pri povezavi na https://narcis.gov.si/ords/narcis/hr/qgz")
+            else:
+                error_text = self.tr("Napaka pri povezavi na") + f" {index_url}"
+            self.iface.messageBar().pushMessage(self.tr("Povezovanje na NarcIS strežnik"), error_text, level=_QGIS_WARNING)
             _finish_check_without_install()
             return
         elif len(task.taskFunResult) == 0:
-            self.iface.messageBar().pushMessage(self.tr("Seznam slojev"), self.tr("Seznam slojev za državo") + " " + self.country_code + " " + self.tr("je prazen") , level=_QGIS_WARNING)
+            self.iface.messageBar().pushMessage(
+                self.tr("Seznam slojev"),
+                self.tr("Indeks katalogov ne vsebuje kataloga") + f" »{self.catalog_code or '–'}« ("
+                + str(self._catalog_index_url()) + ").",
+                level=_QGIS_WARNING, duration=0)
             _finish_check_without_install()
             return
         
@@ -2125,7 +2785,7 @@ class QNarcis:
         local_catalog_exists = self._catalog_files_exist(sub_folder)
 
         if not clientVersionId or clientVersionId != normalized_server_id or sub_folder or not local_catalog_exists:
-            self.task = QNarcisTask(self.tr("Nameščanje novega kataloga slojev" if not sub_folder else "Pripravljanje kataloga slojev"), installQgz,[normalized_server_id, url, self.plugin_dir, drzava, callback, sub_folder], self.onFinishedInstallingQgz)
+            self.task = QNarcisTask(self.tr("Nameščanje novega kataloga slojev" if not sub_folder else "Pripravljanje kataloga slojev"), installQgz,[normalized_server_id, url, self.plugin_dir, drzava, callback, sub_folder] + self._install_profile_args(), self.onFinishedInstallingQgz)
             QgsApplication.taskManager().addTask( self.task )
             return
 
@@ -2167,20 +2827,31 @@ class QNarcis:
             tab_widget = QTabWidget()
             self.iskalnik_tabs = tab_widget
 
-            taksoni_widget = Taksoni()
-            taksoni_widget.loginRequested.connect(self.apiLogin)
-            tab_widget.addTab(taksoni_widget, self.tr("Vrste"))
+            profile = self.profile
+            if profile.enabled('taxa_search'):
+                if profile.is_builtin:
+                    taksoni_widget = Taksoni(service=profile.service('taxa_search'),
+                                             role_suffix=profile.role_suffix)
+                else:
+                    taksoni_widget = Taksoni(service=profile.service('taxa_search'),
+                                             role_suffix=profile.role_suffix,
+                                             cache_file=f"katalog-vrst-{self.profile_id}.json")
+                if profile.enabled('login'):
+                    taksoni_widget.loginRequested.connect(self.apiLogin)
+                tab_widget.addTab(taksoni_widget, self.tr("Vrste"))
 
-            self.parcele_widget = Parcele(searcher_id="parcele")
-            self.parcele_widget.parcelSelected.connect(self.openParcelLayer)
-            self.parcele_widget.searchChanged.connect(self._clearPendingParcel)
-            tab_widget.addTab(self.parcele_widget, self.tr("Parcele"))
+            if profile.enabled('parcels'):
+                self.parcele_widget = Parcele(searcher_id="parcele", service=profile.service('parcels'))
+                self.parcele_widget.parcelSelected.connect(self.openParcelLayer)
+                self.parcele_widget.searchChanged.connect(self._clearPendingParcel)
+                tab_widget.addTab(self.parcele_widget, self.tr("Parcele"))
 
-            self.parcele_lastnistvo_widget = Parcele(searcher_id="lastnistvo")
-            self.parcele_lastnistvo_widget.parcelSelected.connect(self.openParcelLayer)
-            self.parcele_lastnistvo_widget.searchChanged.connect(self._clearPendingParcel)
-            self._lastnistvo_tab_index = tab_widget.addTab(
-                self.parcele_lastnistvo_widget, self.tr("Lastništvo parcel"))
+            if profile.enabled('parcel_ownership'):
+                self.parcele_lastnistvo_widget = Parcele(searcher_id="lastnistvo", service=profile.service('parcels'))
+                self.parcele_lastnistvo_widget.parcelSelected.connect(self.openParcelLayer)
+                self.parcele_lastnistvo_widget.searchChanged.connect(self._clearPendingParcel)
+                self._lastnistvo_tab_index = tab_widget.addTab(
+                    self.parcele_lastnistvo_widget, self.tr("Lastništvo parcel"))
 
             tab_widget.currentChanged.connect(self._onIskalnikTabChanged)
 
@@ -2596,7 +3267,7 @@ class QNarcis:
             original_source = layer.source()
             uri = QgsDataSourceUri()
             uri.setEncodedUri(original_source)
-            parcel_type = "SI.GURS.KN:PARCELE"
+            parcel_type = self.profile.service('parcels').get('parcel_layer') or "SI.GURS.KN:PARCELE"
             layers = uri.params("layers")
             styles = [_PARCEL_POLYGONS_STYLE, _PARCEL_LABELS_STYLE]
             if layers not in ([parcel_type], [parcel_type, parcel_type]):
@@ -2740,12 +3411,27 @@ class QNarcis:
         # see https://doc.qt.io/qt-5/qsortfilterproxymodel.html#public-slots
         self.searchbar.textChanged.connect(self.tree.proxy_model.setFilterString)
 
+        # izbira obsega iskanja
+        self.search_scope_combo = QComboBox()
+        self.search_scope_combo.addItem(self.tr("Ime sloja"), False)
+        self.search_scope_combo.addItem(self.tr("Vsa polja"), True)
+        self.search_scope_combo.setToolTip(self.tr(
+            "Vsa polja: iskanje po imenu, skrbniku, stanju, metapodatkih, merilu, "
+            "viru in tipu servisa ter tehničnem imenu sloja. Ujemajoča polja so označena."))
+        self.search_scope_combo.currentIndexChanged.connect(
+            lambda _i: self.tree.proxy_model.setSearchAllFields(self.search_scope_combo.currentData()))
+
+        search_row = QHBoxLayout()
+        search_row.addWidget(self.searchbar)
+        search_row.addWidget(QLabel(self.tr("Išči po:")))
+        search_row.addWidget(self.search_scope_combo)
+
         self.login_status_label.hide()  # Hidden by default
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 5, 0)
         layout.addWidget(self.login_status_label, alignment=_QT_ALIGN_RIGHT)
-        layout.addWidget(self.searchbar)
+        layout.addLayout(search_row)
         layout.addWidget(self.tree)
 
         container = self.dockwidget.widget
@@ -2765,6 +3451,10 @@ class QNarcis:
         """
         creds = getattr(self, 'geoserver_credentials', None)
         user = creds.get('qnarcis_user') if isinstance(creds, dict) else None
+        if user and isinstance(creds, dict) and self.profile is not None:
+            role_label = self.profile.role_label(creds.get('user') or '')
+            if role_label:
+                user = f"{user} ({role_label})"
 
         def _apply(label):
             """
@@ -2946,27 +3636,24 @@ class QNarcis:
                 return layer_name
         return None
 
-    def _get_country_default_layer_names(self, country_code=None, model=None):
-        country = country_code or self.country_code
-        if country != 'SI':
-            default_name = 'OpenStreetMap'
+    def _get_profile_default_layer_names(self, model=None, profile=None):
+        # Privzete podlage iz profila (default_layers). Vgrajeni profili:
+        # SI = topografska karta, DOF 2023-2025, DOF 2022-2024; MK/XK = OpenStreetMap.
+        profile = profile or self.profile
+        default_groups = profile.default_layers() if profile is not None else []
+        if not default_groups:
+            return []
+        if len(default_groups) == 1:
+            # ena sama podlaga: dosedanje vedenje (ime se vrne tudi, če ga ni v katalogu)
+            default_names = default_groups[0]
             if model is not None:
-                found = self._find_layer_name_in_model(model, [default_name])
+                found = self._find_layer_name_in_model(model, default_names)
                 return [found] if found else []
-            found = self._find_layer_name_in_catalog([default_name])
-            return [found] if found else [default_name]
+            found = self._find_layer_name_in_catalog(default_names)
+            return [found] if found else [default_names[0]]
 
-        # Preferred SI startup order:
-        # A: Pregledna topografska karta (MDP)
-        # B: DOF (2023 - 2025) (GURS)
-        # C: DOF 2022 - 2024 (ARSO)
-        si_default_groups = [
-            ['Pregledna topografska karta'],
-            ['DOF (2023 - 2025)'],
-            ['DOF 2022 - 2024', 'DOF 2022 – 2024']
-        ]
         resolved = []
-        for preferred_names in si_default_groups:
+        for preferred_names in default_groups:
             if model is not None:
                 found = self._find_layer_name_in_model(model, preferred_names)
             else:
@@ -2984,7 +3671,7 @@ class QNarcis:
         candidates = self._normalize_layer_name_list(getattr(self, 'default_layer_names', []))
 
         if not candidates:
-            candidates = self._get_country_default_layer_names(self.country_code)
+            candidates = self._get_profile_default_layer_names()
 
         if self.default_layer_name:
             candidates = self._normalize_layer_name_list([self.default_layer_name] + candidates)
@@ -2997,7 +3684,7 @@ class QNarcis:
             return
 
         tree.data_model = QStandardItemModel()
-        tree.data_model.setHorizontalHeaderLabels([self.tr("Ime sloja"), self.tr("Lastnik sloja"), self.tr("Stanje"), self.tr("Metapodatki"), self.tr("Prikaz pri merilu"), self.tr("Vir servisa"), self.tr("Tip servisa")])
+        tree.data_model.setHorizontalHeaderLabels([self.tr("Ime sloja"), self.tr("Skrbnik sloja"), self.tr("Stanje"), self.tr("Metapodatki"), self.tr("Prikaz pri merilu"), self.tr("Vir servisa"), self.tr("Tip servisa")])
         
         catalog_base = os.path.join(self.plugin_dir, sub_folder) if sub_folder else self.plugin_dir
         additional_json_path = os.path.join(catalog_base, 'additional_layer_data.json')
@@ -3057,12 +3744,20 @@ class QNarcis:
         if cfg is not None:
             return
 
+        login_service = self.profile.service('login')
+        if not login_service.enabled:
+            return
+        login_url = login_service.url()
+        header_user = login_service.field('user').encode("utf-8")
+        header_password = login_service.field('password').encode("utf-8")
+        resp_key = login_service.field('gsrv_key')
+
         def _check(un, pw):
             try:
-                url = "https://narcis.gov.si/ords/narcis/qnarcis-protected/get-user/"
+                url = login_url
                 req = QNetworkRequest(QUrl(url))
-                req.setRawHeader(b"uporabnik", un.encode("utf-8"))
-                req.setRawHeader(b"key", pw.encode("utf-8"))
+                req.setRawHeader(header_user, un.encode("utf-8"))
+                req.setRawHeader(header_password, pw.encode("utf-8"))
 
                 br = QgsBlockingNetworkRequest()
                 status = br.get(req)
@@ -3073,7 +3768,7 @@ class QNarcis:
                         resp = json.loads(data.decode("utf-8", errors="ignore"))
                     except Exception:
                         resp = {}
-                    return "kljuc" in resp
+                    return resp_key in resp
             except Exception:
                 return False
             return False
@@ -3108,7 +3803,7 @@ class QNarcis:
         cfg = None
 
         if 'qnarcis_oauth' not in am.availableAuthMethodConfigs().keys():
-            dialog = CustomCredentialsDialog()
+            dialog = self._credentials_dialog()
             if _exec_dialog(dialog) == _QDIALOG_ACCEPTED:
                 uname, pwd = dialog.get_credentials()
                 uname = uname.strip()
@@ -3190,19 +3885,29 @@ class QNarcis:
             return
 
         # 1b) Opozorilo za CRS sloja (preveri CRS sloja, ne CRS projekta)
+        send_layer_service = self.profile.service('send_layer')
+        # Brez »accepted_crs« v profilu strežnik sprejme vse CRS (vgrajen profil: EPSG:3794).
+        accepted_crs = [str(c).upper() for c in (send_layer_service.get('accepted_crs') or [])]
+        accepted_srids = set()
+        for crs_id in accepted_crs:
+            if crs_id.startswith("EPSG:"):
+                try:
+                    accepted_srids.add(int(crs_id.split(":", 1)[1]))
+                except ValueError:
+                    pass
         layer_crs = layer.crs()
-        is_epsg_3794 = False
+        is_accepted_crs = False
         if layer_crs is not None and layer_crs.isValid():
             authid = (layer_crs.authid() or "").upper()
-            if authid == "EPSG:3794":
-                is_epsg_3794 = True
+            if authid in accepted_crs:
+                is_accepted_crs = True
             else:
                 try:
-                    is_epsg_3794 = int(layer_crs.postgisSrid()) == 3794
+                    is_accepted_crs = int(layer_crs.postgisSrid()) in accepted_srids
                 except Exception:
-                    is_epsg_3794 = False
+                    is_accepted_crs = False
 
-        if not is_epsg_3794:
+        if accepted_crs and not is_accepted_crs:
             crs_label = "neznan CRS"
             if layer_crs is not None and layer_crs.isValid():
                 crs_label = layer_crs.authid() or "neznan CRS"
@@ -3210,7 +3915,7 @@ class QNarcis:
             QMessageBox.warning(
                 self.iface.mainWindow(),
                 "QNarcIS",
-                f"Napačen CRS sloja za pošiljanje ({crs_label}). Sistem sprejema le sloje v CRS EPSG:3794.",
+                f"Napačen CRS sloja za pošiljanje ({crs_label}). Sistem sprejema le sloje v CRS {', '.join(accepted_crs)}.",
                 _QMESSAGEBOX_OK
             )
             return
@@ -3258,12 +3963,18 @@ class QNarcis:
 
         # 4) Zagon naloge (QgsTask) – z blokado ponovnega zagona
         try:
+            upload_kwargs = dict(
+                api_url=send_layer_service.url(),
+                result_url=send_layer_service.get('result_url'),
+                fields=send_layer_service.fields(),
+            )
             t = LayerUploadTask(
                 layer,
                 username=uname,
                 password=pwd,
                 description="NARCIS: pošlji izbrane objekte" if selected_only else "NARCIS: pošlji celoten sloj",
-                selected_only=selected_only
+                selected_only=selected_only,
+                **upload_kwargs
             )
 
             setattr(t, "fid_field_name", fid_field_name)
@@ -3403,8 +4114,13 @@ class QNarcis:
             self.objave_panel = QNarcisContentPanel(
                 self.iface,
                 mode='objave',
-                country_code=self.country_code,
+                country_code=self.catalog_code,
                 translations=self.translations,
+                tr=self.tr,
+                news_service=self.profile.service('news') if self.profile.enabled('news') else None,
+                help_service=self.profile.service('help'),
+                help_lang=self._help_lang(),
+                logo_path=self._profile_logo_path(),
             )
 
         self.objave_panel.run()
@@ -3416,8 +4132,13 @@ class QNarcis:
             self.pomoc_panel = QNarcisContentPanel(
                 self.iface,
                 mode='pomoc',
-                country_code=self.country_code,
+                country_code=self.catalog_code,
                 translations=self.translations,
+                tr=self.tr,
+                news_service=self.profile.service('news') if self.profile.enabled('news') else None,
+                help_service=self.profile.service('help'),
+                help_lang=self._help_lang(),
+                logo_path=self._profile_logo_path(),
             )
 
         self.pomoc_panel.run()
@@ -3435,6 +4156,8 @@ class QNarcis:
         dlg.setWindowModality(_QT_APP_MODAL)
 
         dlg.setFixedWidth(450)
+
+        profileCombo = self._build_profile_section(dlg, vbox)
 
         checkBox = QCheckBox(self.tr("Privzeti sloj ob zagonu QGIS"))
         vbox.addWidget(checkBox)
@@ -3526,10 +4249,14 @@ class QNarcis:
                     tree.setCurrentIndex(proxy_index)
                     tree.scrollTo(proxy_index) 
 
+        # Ali drevo prikazuje katalog trenutno izbranega profila (glej load_catalog_for_profile).
+        dlg._tree_catalog_ready = True
+
         def onCheckBoxStateChanged():
+            catalog_ready = bool(getattr(dlg, '_tree_catalog_ready', False))
             if checkBox.isChecked():
-                searchbar.setEnabled(True)
-                tree.setEnabled(True)
+                searchbar.setEnabled(catalog_ready)
+                tree.setEnabled(catalog_ready)
                 selectedLayersList.setEnabled(True)
                 removeButton.setEnabled(True)
                 moveUpButton.setEnabled(True)
@@ -3562,58 +4289,289 @@ class QNarcis:
         tree.setItemDelegate(CustomDelegate(tree))
         tree.clicked.connect(onTreeClicked)
 
-        vbox.addWidget(QLabel(self.tr("Država")))
+        def update_profile_defaults(profile_id):
+            """Privzeti sloji izbranega profila: shranjena izbira ali privzete podlage profila."""
+            nonlocal defaultLayerName, selectedLayerNames
+            try:
+                defaults = [group[0] for group in profileCombo._preview_profile(profile_id).default_layers() if group]
+            except Exception:
+                defaults = []
+            key = cprof.profile_settings_key(profile_id, 'default_layer_names')
+            saved = self._normalize_layer_name_list(
+                self._read_layer_name_list_setting(QgsSettings(), key))
+            selectedLayerNames = saved or defaults
+            defaultLayerName = selectedLayerNames[0] if selectedLayerNames else ''
+            set_selected_layer_names_to_list(selectedLayerNames)
 
-        def onLayersLoaded():
-            self.dlg.tree.setModel(None)  # Detach the model from the tree view
+        # --- katalog izbranega profila v drevesu -------------------------------
+        # Aktivni profil: kopija nameščenega kataloga (mapa _settings). Drug profil:
+        # njegov katalog se v ozadju prenese v ločeno mapo samo za ta dialog;
+        # nastavitve in nameščeni katalog ostanejo nespremenjeni.
+        catalogStatus = QLabel()
+        catalogStatus.setWordWrap(True)
+        catalogStatus.setTextFormat(_QT_RICH_TEXT_FORMAT)
+        catalogStatus.setAlignment(_QT_ALIGN_LEFT | _QT_ALIGN_TOP)
+        catalogStatus.setVisible(False)
+        catalogProgress = QProgressBar()
+        catalogProgress.setRange(0, 0)
+        catalogProgress.setVisible(False)
+        localCatalogButton = QPushButton(self.tr("Naloži katalog iz datoteke…"))
+        localCatalogButton.setToolTip(self.tr(
+            "Katalog slojev (.tar.xz) iz lokalne datoteke, npr. ko povezava do kataloga na strežniku ne deluje."))
+        localCatalogRow = QHBoxLayout()
+        localCatalogRow.addStretch(1)
+        localCatalogRow.addWidget(localCatalogButton)
+        vbox.insertWidget(vbox.indexOf(searchbar), catalogStatus)
+        vbox.insertWidget(vbox.indexOf(searchbar), catalogProgress)
+        vbox.insertLayout(vbox.indexOf(searchbar), localCatalogRow)
+        dlg.catalog_status = catalogStatus
+        dlg.catalog_progress = catalogProgress
+        dlg.local_catalog_button = localCatalogButton
+        dlg._local_catalog = None  # {'pid', 'path', 'code', 'id', 'url'} – namesti se ob OK
+        dlg._catalog_generation = 0
 
-            for attr in ['data_model', 'proxy_model']:
-                old_model = getattr(self.dlg.tree, attr)
-                old_model.deleteLater()
-                setattr(self.dlg.tree, attr, None)
+        def set_catalog_status(text, level='info'):
+            colors = {'info': '#555555', 'ok': '#2e7d32', 'warning': '#9a4d00'}
+            if not text:
+                catalogStatus.clear()
+                catalogStatus.setVisible(False)
+                return
+            catalogStatus.setText(f'<span style="color:{colors.get(level, "#555555")}">{text}</span>')
+            catalogStatus.setVisible(True)
+            margins = vbox.contentsMargins()
+            _fit_wrapped_label(catalogStatus, dlg.width() - margins.left() - margins.right())
 
-            self.importLayerTreeModel(self.dlg.tree, '_settings')
+        def show_tree_catalog(sub_folder):
+            """Zamenja model drevesa s katalogom iz podane mape (None = prazno drevo)."""
+            tree.setModel(None)
+            for attr in ('data_model', 'proxy_model'):
+                old_model = getattr(tree, attr, None)
+                if old_model is not None:
+                    old_model.deleteLater()
+                setattr(tree, attr, None)
+            if sub_folder:
+                self.importLayerTreeModel(tree, sub_folder)
+            else:
+                tree.data_model = QStandardItemModel()
+                tree.proxy_model = QNarcisSortFilterProxyModel()
+                tree.proxy_model.setSourceModel(tree.data_model)
+                tree.setModel(tree.proxy_model)
+                tree.proxy_model.setView(tree)
+            try:
+                searchbar.textChanged.disconnect()
+            except TypeError:
+                pass
+            searchbar.textChanged.connect(tree.proxy_model.setFilterString)
+            if searchbar.text():
+                tree.proxy_model.setFilterString(searchbar.text())
+            tree.setColumnWidth(0, 430)
+            tree.expandAll()
 
-            self.dlg.searchbar.textChanged.disconnect()
-            self.dlg.searchbar.textChanged.connect(self.dlg.tree.proxy_model.setFilterString)
-
-            self.dlg.tree.setColumnWidth(0,430)
-            self.dlg.tree.expandAll()
-            self.comboBox.setCurrentText(self.dlg._selected_country)
-            self.comboBox.setVisible(True)
-            self.dlg.progress_bar.setVisible(False)
-            set_selected_layer_names_to_list([])
+        def finish_catalog_loading(ready):
+            dlg._tree_catalog_ready = ready
+            catalogProgress.setVisible(False)
+            catalogWatchdog.stop()
             onCheckBoxStateChanged()
 
-        def on_combobox_changed():
-            nonlocal defaultLayerName
-            defaultLayerName = ''
-            selected_country = self.comboBox.currentText()
-            self.dlg._selected_country = selected_country
-            self.dlg.progress_bar.setVisible(True)
-            self.comboBox.setVisible(False)
-            self.dlg.tree.setEnabled(False)
-            self.task = QNarcisTask(self.tr("Nalaganje kataloga slojev"), self.checkForQgzVersion, [selected_country, onLayersLoaded, '_settings'], self.onFinishedCheckForQgzVersion)
-            QgsApplication.taskManager().addTask( self.task )
+        # Naenkrat teče največ ena naloga predogleda (vse pišejo v isto mapo);
+        # novejša zahteva počaka in se zažene, ko se prejšnja konča. Izbor
+        # profila ostane ves čas omogočen.
+        dlg._catalog_task_running = False
+        dlg._catalog_pending = None
+        catalogWatchdog = QTimer(dlg)
+        catalogWatchdog.setSingleShot(True)
+        dlg._watch_generation = None
 
-        # ComboBox
-        comboBox = self.comboBox = QComboBox()
-        comboBox.addItems(self._countries)
+        def on_catalog_timeout():
+            if dlg._watch_generation != dlg._catalog_generation or dlg._tree_catalog_ready:
+                return
+            QgsMessageLog.logMessage(
+                f"Catalog preview: no result after {CATALOG_PREVIEW_TIMEOUT_MS // 1000} s "
+                f"(task running: {dlg._catalog_task_running}).", "QNarcIS", _QGIS_WARNING)
+            dlg._catalog_generation += 1  # pozen rezultat se prezre
+            set_catalog_status(
+                "<b>" + html.escape(self.tr("Kataloga slojev izbranega profila ni mogoče naložiti.")) + "</b> "
+                + html.escape(self.tr("Strežnik se ne odziva.") + " "
+                              + self.tr("Prikazani so privzeti sloji profila; podlage lahko izberete tudi po ponovnem zagonu QGIS-a.")
+                              + " " + self.tr("Podrobnosti so v dnevniku QNarcIS.")), 'warning')
+            finish_catalog_loading(False)
 
-        vbox.addWidget(comboBox)
+        catalogWatchdog.timeout.connect(on_catalog_timeout)
 
-        progress_bar = QProgressBar()
-        progress_bar.setRange(0, 0)
-        self.dlg.progress_bar = progress_bar
+        def run_catalog_task(pid, generation, description, function, args, apply_result):
+            """Naloga v ozadju, ki pripravi katalog v CATALOG_PREVIEW_FOLDER (ena naenkrat)."""
+            def on_finished(task):
+                dlg._catalog_task_running = False
+                pending, dlg._catalog_pending = dlg._catalog_pending, None
+                if getattr(dlg, '_closed', False) or sip.isdeleted(dlg):
+                    return
+                if pending is not None:
+                    pending()
+                if generation != dlg._catalog_generation:
+                    QgsMessageLog.logMessage(f"Catalog preview: result for {pid} ignored (superseded).",
+                                             "QNarcIS", _QGIS_INFO)
+                    return
+                result = getattr(task, 'taskFunResult', None)
+                QgsMessageLog.logMessage(f"Catalog preview: result for {pid}: {result!r}", "QNarcIS", _QGIS_INFO)
+                try:
+                    apply_result(result if isinstance(result, dict) else {})
+                except Exception:
+                    QgsMessageLog.logMessage("Catalog preview failed:\n" + traceback.format_exc(),
+                                             "QNarcIS", _QGIS_CRITICAL)
+                    apply_result({'status': 'error'})
 
-        vbox.addWidget(progress_bar)
+            def start_task():
+                dlg._catalog_task_running = True
+                QgsMessageLog.logMessage(f"Catalog preview: queued for {pid} ({args[:2]!r}).",
+                                         "QNarcIS", _QGIS_INFO)
+                dlg._catalog_task = QNarcisTask(description, function, args, on_finished)
+                QgsApplication.taskManager().addTask(dlg._catalog_task)
 
-        progress_bar.setVisible(False)
+            dlg._watch_generation = generation
+            catalogWatchdog.start(CATALOG_PREVIEW_TIMEOUT_MS)
+            if dlg._catalog_task_running:
+                dlg._catalog_pending = start_task
+            else:
+                start_task()
 
-        if self.country_code in self._countries:
-            comboBox.setCurrentText(self.country_code)
+        fallback_text = " " + html.escape(self.tr(
+            "Prikazani so privzeti sloji profila; podlage lahko izberete tudi po ponovnem zagonu QGIS-a."))
 
-        comboBox.currentIndexChanged.connect(on_combobox_changed)
+        def load_catalog_for_profile(pid):
+            dlg._catalog_generation += 1
+            generation = dlg._catalog_generation
+            dlg._catalog_pending = None
+            dlg._local_catalog = None  # uvoz iz datoteke velja le za profil, za katerega je bil izbran
+            if pid == self.profile_id:
+                if dlg._tree_sub_folder != '_settings':
+                    show_tree_catalog('_settings')
+                    dlg._tree_sub_folder = '_settings'
+                set_catalog_status('')
+                finish_catalog_loading(True)
+                return
+
+            try:
+                preview = profileCombo._preview_profile(pid)
+            except Exception as exc:
+                preview = None
+                QgsMessageLog.logMessage(f"Catalog preview: profile {pid} invalid: {exc}", "QNarcIS", _QGIS_WARNING)
+            fallback = fallback_text
+            show_tree_catalog(None)
+            dlg._tree_sub_folder = None
+            index_url = preview.service('catalog').url('index_url') if preview is not None else None
+            if preview is None or not preview.enabled('catalog') or not index_url or not preview.catalog_code:
+                set_catalog_status(html.escape(self.tr("Izbrani profil nima kataloga slojev.")) + fallback, 'warning')
+                finish_catalog_loading(False)
+                return
+
+            code = preview.catalog_code
+            dlg._tree_catalog_ready = False
+            onCheckBoxStateChanged()
+            catalogProgress.setVisible(True)
+            set_catalog_status(html.escape(self.tr("Nalaganje kataloga slojev izbranega profila")
+                                           + f" ({code}) …"))
+
+            def apply_result(result):
+                status = result.get('status')
+                if status == 'ok' and self._catalog_files_exist(CATALOG_PREVIEW_FOLDER):
+                    show_tree_catalog(CATALOG_PREVIEW_FOLDER)
+                    dlg._tree_sub_folder = CATALOG_PREVIEW_FOLDER
+                    set_catalog_status(html.escape(
+                        self.tr("Prikazan je katalog slojev izbranega profila") + f" ({code}). "
+                        + self.tr("Profil bo uporabljen po ponovnem zagonu QGIS-a.")), 'ok')
+                    finish_catalog_loading(True)
+                    return
+                if status == 'not_in_index':
+                    reason = self.tr("Indeks katalogov ne vsebuje kataloga") + f" »{code}« ({index_url})."
+                elif status == 'install_error':
+                    reason = self.tr(result.get('detail') or "Napaka pri nameščanju kataloga slojev")
+                elif status == 'index_error':
+                    reason = self.tr("Napaka pri povezavi na") + f" {index_url}."
+                else:
+                    reason = self.tr("Podrobnosti so v dnevniku QNarcIS.")
+                set_catalog_status(
+                    "<b>" + html.escape(self.tr("Kataloga slojev izbranega profila ni mogoče naložiti.")) + "</b> "
+                    + html.escape(reason) + fallback, 'warning')
+                finish_catalog_loading(False)
+
+            run_catalog_task(pid, generation, self.tr("Nalaganje kataloga slojev"), prepareCatalogPreview,
+                             [index_url, code, self.plugin_dir, pid + '__'], apply_result)
+
+        def load_local_catalog():
+            """Gumb »Naloži katalog iz datoteke…«: predogled v drevesu, namestitev ob OK."""
+            pid = profileCombo.currentData() or cprof.BUILTIN_ID
+            try:
+                preview = profileCombo._preview_profile(pid)
+            except Exception as exc:
+                QgsMessageLog.logMessage(f"Local catalog: profile {pid} invalid: {exc}", "QNarcIS", _QGIS_WARNING)
+                return
+            code = preview.catalog_code
+            if not code:
+                set_catalog_status(html.escape(self.tr("Izbrani profil nima kataloga slojev.")), 'warning')
+                return
+            path, _filter = QFileDialog.getOpenFileName(
+                dlg, self.tr("Naloži katalog iz datoteke…"), os.path.expanduser('~'),
+                self.tr("Katalog slojev") + " (*.tar.xz);;" + self.tr("Vse datoteke") + " (*)")
+            if not path:
+                return
+            index_url = (preview.service('catalog').url('index_url')
+                         if preview.enabled('catalog') else None)
+            name = os.path.basename(path)
+
+            dlg._catalog_generation += 1
+            generation = dlg._catalog_generation
+            dlg._catalog_pending = None
+            dlg._local_catalog = None
+            show_tree_catalog(None)
+            dlg._tree_sub_folder = None
+            dlg._tree_catalog_ready = False
+            onCheckBoxStateChanged()
+            catalogProgress.setVisible(True)
+            set_catalog_status(html.escape(self.tr("Nalaganje kataloga slojev iz datoteke") + f" »{name}« …"))
+
+            def apply_result(result):
+                if result.get('status') == 'ok' and self._catalog_files_exist(CATALOG_PREVIEW_FOLDER):
+                    show_tree_catalog(CATALOG_PREVIEW_FOLDER)
+                    dlg._tree_sub_folder = CATALOG_PREVIEW_FOLDER
+                    dlg._local_catalog = {'pid': pid, 'path': path, 'code': code,
+                                          'id': result.get('id'), 'url': result.get('url')}
+                    text = (self.tr("Prikazan je katalog slojev iz datoteke") + f" »{name}« ({code}). "
+                            + self.tr("Katalog bo nameščen po potrditvi z OK in ponovnem zagonu QGIS-a."))
+                    if not result.get('id'):
+                        text += " " + self.tr(
+                            "Indeks katalogov ni dosegljiv, zato bo katalog ob prvem zagonu z dosegljivim "
+                            "strežnikom zamenjan s katalogom s strežnika.")
+                    set_catalog_status(html.escape(text), 'ok')
+                    finish_catalog_loading(True)
+                    return
+                reason = self.tr(result.get('detail') or CATALOG_ERR_LOCAL_FILE)
+                set_catalog_status(
+                    "<b>" + html.escape(self.tr("Kataloga slojev iz datoteke ni mogoče naložiti.")) + "</b> "
+                    + html.escape(reason) + " " + html.escape(self.tr("Podrobnosti so v dnevniku QNarcIS.")),
+                    'warning')
+                finish_catalog_loading(False)
+
+            run_catalog_task(pid, generation, self.tr("Nalaganje kataloga slojev"), prepareLocalCatalogPreview,
+                             [path, index_url, code, self.plugin_dir, pid + '__'], apply_result)
+
+        localCatalogButton.clicked.connect(load_local_catalog)
+
+        dlg._tree_sub_folder = '_settings'
+
+        def on_profile_changed(_index=None):
+            pid = profileCombo.currentData() or cprof.BUILTIN_ID
+            update_profile_defaults(pid)
+            enabled_key = cprof.profile_settings_key(pid, 'default_layer_enabled')
+            checkBox.setChecked(self._read_bool_setting(
+                QgsSettings(), enabled_key, bool(selectedLayerNames)))
+            load_catalog_for_profile(pid)
+            profileCombo._update_profile_info()
+
+        profileCombo.currentIndexChanged.connect(on_profile_changed)
+        profileCombo._selection_applied = on_profile_changed
+        profileCombo._profile_settings_updated = (
+            lambda pid: update_profile_defaults(pid)
+            if pid == (profileCombo.currentData() or cprof.BUILTIN_ID) else None)
 
         def on_ok_clicked():
             
@@ -3622,20 +4580,28 @@ class QNarcis:
             selectedLayerNames = self._normalize_layer_name_list(get_selected_layer_names_from_list())
 
             if checkBox.isChecked():
+                selected_pid = profileCombo.currentData() or cprof.BUILTIN_ID
+                preview = profileCombo._preview_profile(selected_pid)
                 is_single_legacy_si_default = (
-                    self.comboBox.currentText() == 'SI'
+                    preview.is_builtin
+                    and preview.catalog_code == 'SI'
                     and len(selectedLayerNames) == 1
                     and self._normalize_layer_title(selectedLayerNames[0]) == self._normalize_layer_title('Pregledna topografska karta')
                 )
 
                 if not selectedLayerNames or is_single_legacy_si_default:
-                    selectedLayerNames = self._get_country_default_layer_names(self.comboBox.currentText(), tree.data_model)
+                    if getattr(dlg, '_tree_catalog_ready', False) and tree.data_model is not None:
+                        # drevo prikazuje katalog izbranega profila
+                        selectedLayerNames = self._get_profile_default_layer_names(tree.data_model, preview)
+                    else:
+                        selectedLayerNames = [group[0] for group in preview.default_layers() if group]
 
                 if selectedLayerNames:
                     defaultLayerName = selectedLayerNames[0]
                 elif not defaultLayerName:
-                    defaultLayerName = 'Pregledna topografska karta' if self.comboBox.currentText() == 'SI' else 'OpenStreetMap'
-                    selectedLayerNames = [defaultLayerName]
+                    groups = preview.default_layers()
+                    defaultLayerName = groups[0][0] if groups else ''
+                    selectedLayerNames = [defaultLayerName] if defaultLayerName else []
             
             dlg.accept()
 
@@ -3645,37 +4611,335 @@ class QNarcis:
         vbox.addWidget(ok_button, alignment=_QT_ALIGN_RIGHT | _QT_ALIGN_BOTTOM)
 
         result = _exec_dialog(dlg)
+        dlg._closed = True  # rezultat predogleda kataloga, ki pride pozneje, se prezre
 
         def show_restart_required_message():
             msg = QMessageBox()
             msg.setIcon(_QMESSAGEBOX_INFORMATION)
-            msg.setWindowTitle("Restart Required")
-            msg.setText("A restart is required due to the country change.")
-            msg.setInformativeText("Please save your work and restart QGIS to apply the changes.")
+            msg.setWindowTitle(self.tr("Potreben je ponovni zagon"))
+            msg.setText(self.tr("Spremembe bodo uporabljene po ponovnem zagonu QGIS-a."))
+            msg.setInformativeText(self.tr(
+                "Shranite delo in ponovno zaženite QGIS, da se spremembe varno uveljavijo."))
             msg.setStandardButtons(_QMESSAGEBOX_OK)
             msg.setDefaultButton(_QMESSAGEBOX_OK)
             _exec_dialog(msg)
 
         if result == _QDIALOG_ACCEPTED:
 
-            country_code = comboBox.currentText()
-            
-            if country_code != self.country_code:
+            selected_profile_id = profileCombo.currentData() or cprof.BUILTIN_ID
+            profile_changed = selected_profile_id != self.profile_id
+            override_drafts = profileCombo._profile_override_drafts
+            to_store = profileCombo._profiles_to_store
+            to_remove = profileCombo._profiles_to_remove
+            # profili, katerih katalog je treba ponovno namestiti
+            changed_profile_ids = set(override_drafts) | set(to_store)
+            if profile_changed or self.profile_id in changed_profile_ids | to_remove:
+                # Poverilnice ene infrastrukture ne smejo oditi na drugo.
+                self.deleteLoginConfiguration()
+            s = QgsSettings()
+            for pid in to_remove:
+                cprof.remove_profile(pid, s)
+            for pid in to_store:
+                data = profileCombo._profile_sources.get(pid)
+                if data:
+                    cprof.store_profile(data, s)
+            if profile_changed:
+                cprof.set_active_profile_id(selected_profile_id, s)
+            for pid, overrides in override_drafts.items():
+                if pid not in to_remove:
+                    cprof.store_profile_overrides(pid, overrides, s)
+            for pid in changed_profile_ids:
+                s.remove(cprof.profile_settings_key(pid, 'qgz_version'))
+
+            local_catalog = dlg._local_catalog
+            local_installed = False
+            if local_catalog and local_catalog['pid'] == selected_profile_id \
+                    and selected_profile_id not in to_remove:
+                local_installed = self._install_local_catalog(local_catalog)
+
+            if profile_changed or changed_profile_ids or to_remove or local_installed:
                 show_restart_required_message()
 
-            s = QgsSettings()
-            s.setValue('q_narcis/country_code', comboBox.currentText())
+            enabled = checkBox.isChecked()
+            names = self._normalize_layer_name_list(selectedLayerNames)
+            first_name = names[0] if names else ''
+            if not profile_changed:
+                self.default_layer_enabled = enabled
+                self.default_layer_names = names
+                self.default_layer_name = first_name
 
-            self.default_layer_enabled = checkBox.isChecked()
-            self.default_layer_names = self._normalize_layer_name_list(selectedLayerNames)
-            if self.default_layer_names:
-                self.default_layer_name = self.default_layer_names[0]
+            s.setValue(cprof.profile_settings_key(selected_profile_id, 'default_layer_enabled'), enabled)
+            s.setValue(cprof.profile_settings_key(selected_profile_id, 'default_layer_name'), first_name)
+            s.setValue(cprof.profile_settings_key(selected_profile_id, 'default_layer_names'), json.dumps(names))
+
+    def _install_local_catalog(self, local):
+        """
+        Ob potrditvi Nastavitev namesti katalog, izbran z »Naloži katalog iz datoteke…«.
+        Številka iz indeksa znana: arhiv se shrani v _cached_qgz (kot ročno skopiran
+        arhiv) in se namesti ob naslednjem zagonu po običajni poti. Indeks ni bil
+        dosegljiv: katalog se namesti takoj, brez številke različice.
+        """
+        pid, path, code = local['pid'], local['path'], local['code']
+        try:
+            if local.get('id') and local.get('url'):
+                storeLocalCatalogInCache(path, self.plugin_dir, code, local['id'], local['url'], pid + '__')
+                QgsSettings().remove(cprof.profile_settings_key(pid, 'qgz_version'))
+                QgsMessageLog.logMessage(
+                    f"Local catalog {path} stored as catalog {local['id']} for profile {pid}.", "QNarcIS", _QGIS_INFO)
+                return True
+            QApplication.setOverrideCursor(_QT_WAIT_CURSOR)
+            try:
+                result = installQgz(None, '', self.plugin_dir, code, None, '',
+                                    cprof.profile_settings_key(pid, ''), pid + '__', local_archive=path)
+            finally:
+                QApplication.restoreOverrideCursor()
+            if not result or 'error' in result:
+                raise RuntimeError(self.tr((result or {}).get('error') or CATALOG_ERR_LOCAL_FILE))
+            QgsMessageLog.logMessage(
+                f"Local catalog {path} installed for profile {pid} (no catalog number).", "QNarcIS", _QGIS_INFO)
+            return True
+        except Exception as exc:
+            QgsMessageLog.logMessage("Local catalog install failed:\n" + traceback.format_exc(),
+                                     "QNarcIS", _QGIS_CRITICAL)
+            QMessageBox.warning(None, self.tr("Nameščanje kataloga slojev"),
+                                self.tr("Napaka pri nameščanju kataloga slojev") + f": {exc}")
+            return False
+
+    _PROFILE_SERVICE_LABELS = (
+        ('catalog', 'katalog'),
+        ('login', 'prijava'),
+        ('send_layer', 'pošlji sloj'),
+        ('taxa_search', 'iskalnik vrst'),
+        ('parcels', 'parcele'),
+        ('parcel_ownership', 'lastništvo parcel'),
+        ('news', 'obvestila'),
+        ('map_template', 'karta'),
+        ('help', 'pomoč'),
+    )
+
+    def _build_profile_section(self, dlg, vbox):
+        """
+        Skupina »Profil infrastrukture« v Nastavitvah. Vrne QComboBox z izbranim
+        profilom. Uvoz, odstranitev in spremembe profilov se shranijo šele ob
+        potrditvi glavnega okna (runSettings).
+        """
+        box = QGroupBox(self.tr("Profil infrastrukture"))
+        box_layout = QVBoxLayout(box)
+
+        combo = QComboBox()
+        importButton = QPushButton(self.tr("Uvozi…"))
+        exportButton = QPushButton(self.tr("Izvozi…"))
+        editButton = QPushButton(self.tr("Nastavitve profila…"))
+        removeButton = QPushButton(self.tr("Odstrani"))
+
+        box_layout.addWidget(combo)
+        button_row = QHBoxLayout()
+        button_row.addWidget(importButton)
+        button_row.addWidget(exportButton)
+        button_row.addWidget(editButton)
+        button_row.addWidget(removeButton)
+        button_row.addStretch(1)
+        box_layout.addLayout(button_row)
+
+        infoLabel = QLabel()
+        infoLabel.setWordWrap(True)
+        box_layout.addWidget(infoLabel)
+        vbox.addWidget(box)
+
+        builtins = cprof.builtin_profiles()
+        combo._profile_sources = dict(builtins)
+        combo._profile_sources.update(copy.deepcopy(cprof.list_profiles(QgsSettings())))
+        combo._profiles_to_store = set()
+        combo._profiles_to_remove = set()
+        combo._profile_override_drafts = {}  # {id profila: prepisi}
+
+        def preview_profile(pid):
+            """Razrešen profil z upoštevanjem še neshranjenih sprememb v tem oknu."""
+            settings = QgsSettings()
+            source = combo._profile_sources.get(pid)
+            if source is None:
+                raise cprof.ProfileError(f"Profil »{pid}« ne obstaja.")
+            if pid in combo._profile_override_drafts:
+                overrides = copy.deepcopy(combo._profile_override_drafts[pid])
+                overrides.update(cprof.read_legacy_overrides(settings))
             else:
-                self.default_layer_name = ''
+                overrides = cprof.read_overrides(settings, pid)
+            return cprof.build_profile_from_data(
+                source, overrides, is_builtin=cprof.is_builtin_profile_id(pid))
 
-            s.setValue('q_narcis/default_layer_enabled', self.default_layer_enabled)
-            s.setValue('q_narcis/default_layer_name', self.default_layer_name)
-            s.setValue('q_narcis/default_layer_names', json.dumps(self.default_layer_names))
+        combo._preview_profile = preview_profile
+
+        def fill(selected_id):
+            combo.blockSignals(True)
+            combo.clear()
+            for pid, data in builtins.items():
+                combo.addItem(str(data.get('name') or pid) + " (" + self.tr("vgrajen") + ")", pid)
+            profiles = {
+                pid: data for pid, data in combo._profile_sources.items()
+                if pid not in builtins and pid not in combo._profiles_to_remove
+            }
+            for pid, data in sorted(profiles.items(), key=lambda kv: str(kv[1].get('name', kv[0])).lower()):
+                combo.addItem(str(data.get('name') or pid), pid)
+            index = combo.findData(selected_id)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+            combo.blockSignals(False)
+            selection_callback = getattr(combo, '_selection_applied', None)
+            if callable(selection_callback):
+                selection_callback()
+            else:
+                update_info()
+
+        def update_info():
+            pid = combo.currentData() or cprof.BUILTIN_ID
+            removeButton.setEnabled(not cprof.is_builtin_profile_id(pid))
+            try:
+                profile = preview_profile(pid)
+            except Exception as exc:
+                infoLabel.setText(html.escape(str(exc)))
+                return
+            hosts, _pw = profile.domains()
+            labels = dict(self._PROFILE_SERVICE_LABELS)
+            services = [self.tr(labels[n]) for n, _l in self._PROFILE_SERVICE_LABELS if profile.enabled(n)]
+            lines = []
+            if profile.get('organization'):
+                lines.append(self.tr("Organizacija") + ": " + str(profile.get('organization')))
+            if not profile.is_builtin and profile.get('profile_version'):
+                lines.append(self.tr("Verzija profila") + ": " + str(profile.get('profile_version')))
+            if profile.enabled('catalog'):
+                lines.append(self.tr("Katalog") + ": " + (profile.catalog_code or "–"))
+            lines.append(self.tr("Strežniki") + ": " + (", ".join(sorted(hosts)) or "–"))
+            lines.append(self.tr("Funkcionalnosti") + ": " + (", ".join(services) or "–"))
+            if pid != self.profile_id:
+                lines.append("<b>" + self.tr("Sprememba profila zahteva ponovni zagon QGIS-a in odjavo.") + "</b>")
+            if pid in combo._profile_override_drafts:
+                lines.append("<b>" + self.tr("Nastavitve profila so spremenjene in še niso shranjene.") + "</b>")
+            infoLabel.setText("<br>".join(html.escape(l) if not l.startswith("<b>") else l for l in lines))
+            outer, inner = dlg.layout().contentsMargins(), box_layout.contentsMargins()
+            _fit_wrapped_label(infoLabel, dlg.width() - outer.left() - outer.right()
+                               - inner.left() - inner.right() - 4)
+
+        combo._update_profile_info = update_info
+
+        def edit_profile():
+            from .profile_settings_dialog import edit_profile_settings
+            pid = combo.currentData() or cprof.BUILTIN_ID
+            source = copy.deepcopy(combo._profile_sources.get(pid))
+            if not source:
+                return
+            overrides = edit_profile_settings(
+                dlg, pid, source, QgsSettings(), self.tr,
+                combo._profile_override_drafts.get(pid))
+            if overrides is None:
+                return
+            if overrides == cprof.read_profile_overrides(pid, QgsSettings()):
+                combo._profile_override_drafts.pop(pid, None)
+            else:
+                combo._profile_override_drafts[pid] = overrides
+            update_info()
+            callback = getattr(combo, '_profile_settings_updated', None)
+            if callable(callback):
+                callback(pid)
+
+        def import_profile():
+            s = QgsSettings()
+            path, _filter = QFileDialog.getOpenFileName(
+                dlg, self.tr("Uvozi profil infrastrukture"), "",
+                self.tr("Profil QNarcIS") + " (*.qnarcis.json *.json)")
+            if not path:
+                return
+            try:
+                data, warnings = cprof.read_profile_file(path, cprof.allow_http(s))
+            except cprof.ProfileError as exc:
+                QMessageBox.warning(dlg, "QNarcIS", self.tr("Profila ni mogoče uvoziti") + f":\n{exc}")
+                return
+            existing = combo._profile_sources.get(data['id'])
+            if not self._confirm_profile_import(dlg, data, warnings, existing=existing):
+                return
+            combo._profile_sources[data['id']] = copy.deepcopy(data)
+            combo._profiles_to_store.add(data['id'])
+            combo._profiles_to_remove.discard(data['id'])
+            fill(data['id'])
+
+        def export_profile():
+            pid = combo.currentData() or cprof.BUILTIN_ID
+            data = combo._profile_sources.get(pid)
+            if not data:
+                return
+            path, _filter = QFileDialog.getSaveFileName(
+                dlg, self.tr("Izvozi profil infrastrukture"), f"{data.get('id', pid)}{cprof.PROFILE_FILE_SUFFIX}",
+                self.tr("Profil QNarcIS") + " (*.qnarcis.json)")
+            if not path:
+                return
+            try:
+                with open(path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            except OSError as exc:
+                QMessageBox.warning(dlg, "QNarcIS", str(exc))
+
+        def remove_selected_profile():
+            pid = combo.currentData()
+            if not pid or cprof.is_builtin_profile_id(pid):
+                return
+            answer = QMessageBox.question(
+                dlg, "QNarcIS",
+                self.tr("Odstranim profil") + f" »{combo.currentText()}«?",
+                _QMESSAGEBOX_YES | _QMESSAGEBOX_NO, _QMESSAGEBOX_NO)
+            if answer != _QMESSAGEBOX_YES:
+                return
+            combo._profiles_to_remove.add(pid)
+            combo._profiles_to_store.discard(pid)
+            combo._profile_override_drafts.pop(pid, None)
+            fill(cprof.BUILTIN_ID)
+
+        combo.currentIndexChanged.connect(lambda _i: update_info())
+        importButton.clicked.connect(import_profile)
+        exportButton.clicked.connect(export_profile)
+        editButton.clicked.connect(edit_profile)
+        removeButton.clicked.connect(remove_selected_profile)
+
+        fill(self.profile_id)
+        return combo
+
+    def _confirm_profile_import(self, parent, data, warnings, existing=None):
+        """Potrditveno okno: kateri strežniki bodo uporabljeni in kam gre geslo."""
+        hosts, password_hosts = cprof.profile_domains(data)
+        if existing is None:
+            existing = cprof.list_profiles(QgsSettings()).get(data['id'])
+
+        parts = [
+            "<b>" + html.escape(str(data.get('name'))) + "</b>",
+        ]
+        if data.get('organization'):
+            parts.append(html.escape(str(data['organization'])))
+        if existing is not None:
+            parts.append(self.tr("Profil že obstaja in bo posodobljen") + ": "
+                         + html.escape(str(existing.get('profile_version', '–'))) + " → "
+                         + html.escape(str(data.get('profile_version', '–'))))
+        if hosts:
+            host_lines = "".join(
+                f"<li><b>{html.escape(h)}</b> ({html.escape(', '.join(svc))})</li>" for h, svc in sorted(hosts.items()))
+            parts.append(self.tr("Vtičnik se bo povezoval s strežniki") + f":<ul>{host_lines}</ul>")
+        else:
+            parts.append(self.tr("Profil ne vsebuje storitev."))
+        if password_hosts:
+            pw = ", ".join(f"<b>{html.escape(h)}</b>" for h in sorted(password_hosts))
+            text = self.tr("Vaše uporabniško ime in geslo bosta poslana na") + f": {pw}."
+            if len(password_hosts) > 1:
+                text += " <b>" + self.tr("Pozor: geslo prejme več različnih strežnikov.") + "</b>"
+            parts.append(text)
+        if warnings:
+            parts.append(self.tr("Opozorila") + ":<ul>" + "".join(f"<li>{html.escape(w)}</li>" for w in warnings) + "</ul>")
+        parts.append(self.tr("Uvozite samo profile iz zaupanja vrednega vira."))
+
+        box = QMessageBox(parent)
+        box.setIcon(_QMESSAGEBOX_INFORMATION)
+        box.setWindowTitle(self.tr("Uvoz profila infrastrukture"))
+        box.setTextFormat(_QT_RICH_TEXT_FORMAT)
+        box.setText("<br><br>".join(parts))
+        box.setStandardButtons(_QMESSAGEBOX_YES | _QMESSAGEBOX_NO)
+        box.setDefaultButton(_QMESSAGEBOX_NO)
+        _exec_dialog(box)
+        return box.clickedButton() == box.button(_QMESSAGEBOX_YES)
 
     def layerSelector(self, vbox):
         

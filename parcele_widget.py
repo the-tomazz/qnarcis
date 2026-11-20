@@ -177,9 +177,19 @@ class Parcele(QWidget):
     parcelSelected = pyqtSignal(dict)
     searchChanged = pyqtSignal()
 
+    # Privzete vrednosti (= vgrajen ARSO profil); profil jih prepiše na instanci.
     WFS_URL = "https://ipi.eprostor.gov.si/wfs-si-gurs-kn/wfs"
     KO_TYPENAME = "SI.GURS.KN:KATASTRSKE_OBCINE"
     PARCEL_TYPENAME = "SI.GURS.KN:PARCELE"
+    PARCEL_CRS = "EPSG:3794"
+    F = {
+        "ko_id": "KO_ID",
+        "ko_name": "NAZIV",
+        "ko_code": "SIFKO",
+        "parcel_id": "EID_PARCELA",
+        "parcel_number": "ST_PARCELE",
+        "geometry": "GEOM",
+    }
     RESULT_LIMIT = 50
     KO_RESULT_LIMIT = 50
     KO_QUERY_CACHE_LIMIT = 100
@@ -190,8 +200,10 @@ class Parcele(QWidget):
     # was truncated and longer queries may be derived locally.
     _ko_query_cache = {}
 
-    def __init__(self, parent=None, searcher_id="parcele"):
+    def __init__(self, parent=None, searcher_id="parcele", service=None):
+        """service: country_profile.Service('parcels') ali None (privzete vrednosti)."""
         super().__init__(parent)
+        self._apply_service(service)
         self._searcher_id = searcher_id
         self._ko_task = None
         self._parcel_task = None
@@ -214,6 +226,17 @@ class Parcele(QWidget):
         self._search_timer.timeout.connect(self._search_parcels)
 
         self._setup_ui()
+
+    def _apply_service(self, service):
+        if service is None:
+            return
+        self.WFS_URL = service.get("wfs_url") or self.WFS_URL
+        self.KO_TYPENAME = service.get("ko_layer") or self.KO_TYPENAME
+        self.PARCEL_TYPENAME = service.get("parcel_layer") or self.PARCEL_TYPENAME
+        self.PARCEL_CRS = service.get("crs") or self.PARCEL_CRS
+        fields = dict(self.F)
+        fields.update(service.fields())
+        self.F = fields
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -340,15 +363,16 @@ class Parcele(QWidget):
         # Server-side prefix search: the WFS rejects bulk downloads, so the
         # KO list is never fetched in full. Digits search the KO code,
         # anything else searches the (uppercase) KO name.
+        F = self.F
         if query.isdigit():
-            cql_filter = "SIFKO LIKE '{0}%'".format(self._escape_cql_like(query))
+            cql_filter = "{0} LIKE '{1}%'".format(F["ko_code"], self._escape_cql_like(query))
         else:
-            cql_filter = "strToUpperCase(NAZIV) LIKE '{0}%'".format(
-                self._escape_cql_like(query.upper())
+            cql_filter = "strToUpperCase({0}) LIKE '{1}%'".format(
+                F["ko_name"], self._escape_cql_like(query.upper())
             )
         url = self._build_wfs_url(
             self.KO_TYPENAME,
-            ("KO_ID", "NAZIV", "SIFKO"),
+            (F["ko_id"], F["ko_name"], F["ko_code"]),
             self.KO_RESULT_LIMIT,
             cql_filter,
         )
@@ -367,9 +391,9 @@ class Parcele(QWidget):
         records = []
         for feature in (task.data or {}).get("features", []):
             properties = feature.get("properties") or {}
-            ko_id = properties.get("KO_ID")
-            sifko = properties.get("SIFKO")
-            name = str(properties.get("NAZIV") or "").strip()
+            ko_id = properties.get(self.F["ko_id"])
+            sifko = properties.get(self.F["ko_code"])
+            name = str(properties.get(self.F["ko_name"]) or "").strip()
             if ko_id is None or sifko is None or not name:
                 continue
             records.append({"ko_id": int(ko_id), "sifko": int(sifko), "name": name})
@@ -548,13 +572,14 @@ class Parcele(QWidget):
         request_id = self._parcel_request_id
         self._cancel_task("_parcel_task")
 
+        F = self.F
         safe_prefix = self._escape_cql_like(prefix)
-        cql_filter = "KO_ID={0} AND ST_PARCELE LIKE '{1}%'".format(
-            self._selected_ko["ko_id"], safe_prefix
+        cql_filter = "{0}={1} AND {2} LIKE '{3}%'".format(
+            F["ko_id"], self._selected_ko["ko_id"], F["parcel_number"], safe_prefix
         )
         url = self._build_wfs_url(
             self.PARCEL_TYPENAME,
-            ("EID_PARCELA", "KO_ID", "ST_PARCELE"),
+            (F["parcel_id"], F["ko_id"], F["parcel_number"]),
             self.RESULT_LIMIT,
             cql_filter,
         )
@@ -573,8 +598,8 @@ class Parcele(QWidget):
         records = []
         for feature in (task.data or {}).get("features", []):
             properties = feature.get("properties") or {}
-            eid = str(properties.get("EID_PARCELA") or "").strip()
-            number = str(properties.get("ST_PARCELE") or "").strip()
+            eid = str(properties.get(self.F["parcel_id"]) or "").strip()
+            number = str(properties.get(self.F["parcel_number"]) or "").strip()
             if eid and number:
                 records.append({"eid_parcela": eid, "number": number})
 
@@ -630,9 +655,9 @@ class Parcele(QWidget):
         eid = parcel["eid_parcela"].replace("'", "''")
         url = self._build_wfs_url(
             self.PARCEL_TYPENAME,
-            ("EID_PARCELA", "GEOM"),
+            (self.F["parcel_id"], self.F["geometry"]),
             1,
-            "EID_PARCELA='{}'".format(eid),
+            "{0}='{1}'".format(self.F["parcel_id"], eid),
         )
         self.status_label.setText("Pripravljam parcelo ...")
         self.parcel_edit.setEnabled(False)
@@ -669,7 +694,7 @@ class Parcele(QWidget):
             "sifko": self._selected_ko["sifko"],
             "ko_name": self._selected_ko["name"],
             "bbox": [float(value) for value in bbox[:4]],
-            "crs": "EPSG:3794",
+            "crs": self.PARCEL_CRS,
             "geometry": geometry,
         })
 
